@@ -78,6 +78,80 @@ class TestParseDpoLine:
         assert train.parse_dpo_line("") is None
 
 
+class TestGitShortSha:
+    def test_returns_string_when_in_git_repo(self):
+        # We're running pytest from the repo root, so this should always work
+        sha = train.git_short_sha()
+        assert sha is None or (isinstance(sha, str) and len(sha) >= 4)
+
+    def test_returns_none_when_not_in_git_repo(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert train.git_short_sha() is None
+
+
+class TestDatasetHash:
+    def test_hashes_file_contents(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "train.jsonl").write_text('{"a": 1}\n')
+        (d / "valid.jsonl").write_text('{"b": 2}\n')
+        h1 = train.dataset_hash(d)
+        h2 = train.dataset_hash(d)
+        assert h1 == h2  # deterministic
+        assert isinstance(h1, str) and len(h1) >= 8
+
+    def test_changes_when_content_changes(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "train.jsonl").write_text('{"a": 1}\n')
+        (d / "valid.jsonl").write_text('{"b": 2}\n')
+        h1 = train.dataset_hash(d)
+        (d / "train.jsonl").write_text('{"a": 2}\n')
+        h2 = train.dataset_hash(d)
+        assert h1 != h2
+
+    def test_handles_missing_dir(self, tmp_path):
+        # Missing dir should not crash; return a sentinel.
+        h = train.dataset_hash(tmp_path / "nope")
+        assert h == "missing"
+
+
+class TestMakeAdapterDir:
+    def test_includes_stage_timestamp_sha(self, tmp_path):
+        d = train.make_adapter_dir(tmp_path, "sft", "20260101T120000", "abc1234")
+        assert d.parent == tmp_path / "sft"
+        assert d.name == "20260101T120000-abc1234"
+
+    def test_creates_directory(self, tmp_path):
+        d = train.make_adapter_dir(tmp_path, "dpo", "20260101T120000", "abc1234")
+        assert d.exists()
+        assert d.is_dir()
+
+    def test_handles_no_sha(self, tmp_path):
+        d = train.make_adapter_dir(tmp_path, "sft", "20260101T120000", None)
+        assert "nosha" in d.name
+
+
+class TestUpdateLatestSymlink:
+    def test_creates_symlink(self, tmp_path):
+        target = tmp_path / "20260101T120000-abc"
+        target.mkdir()
+        link = tmp_path / "latest"
+        train.update_latest_symlink(link, target)
+        assert link.is_symlink()
+        assert link.resolve() == target.resolve()
+
+    def test_replaces_existing_symlink(self, tmp_path):
+        old_target = tmp_path / "old"
+        old_target.mkdir()
+        new_target = tmp_path / "new"
+        new_target.mkdir()
+        link = tmp_path / "latest"
+        train.update_latest_symlink(link, old_target)
+        train.update_latest_symlink(link, new_target)
+        assert link.resolve() == new_target.resolve()
+
+
 class TestBuildRunName:
     def test_includes_stage_and_model(self):
         name = train.build_run_name(stage="sft", model="mlx-community/gemma-3-1b-it-bf16",

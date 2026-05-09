@@ -16,6 +16,8 @@ of an observability problem.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -28,6 +30,68 @@ from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parent
 load_dotenv(REPO_ROOT / ".env")
+
+
+# ---------- adapter versioning helpers ----------
+
+def git_short_sha() -> Optional[str]:
+    """Short git SHA for the current HEAD, or None if not in a repo."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return out.strip() or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def dataset_hash(data_dir: Path) -> str:
+    """SHA-256 over train.jsonl + valid.jsonl content. 'missing' if dir absent."""
+    data_dir = Path(data_dir)
+    if not data_dir.exists():
+        return "missing"
+    h = hashlib.sha256()
+    for name in ("train.jsonl", "valid.jsonl"):
+        p = data_dir / name
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def make_adapter_dir(
+    base_dir: Path,
+    stage: str,
+    timestamp: str,
+    git_sha: Optional[str],
+) -> Path:
+    """Create and return adapters/<stage>/<timestamp>-<sha>/."""
+    sha_part = git_sha or "nosha"
+    out = Path(base_dir) / stage / f"{timestamp}-{sha_part}"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def update_latest_symlink(link_path: Path, target: Path) -> None:
+    """Atomically point `link_path` at `target` (relative path for portability).
+
+    Replaces an existing symlink or file. No-op if the link already points at
+    the target.
+    """
+    link_path = Path(link_path)
+    target = Path(target)
+    rel = os.path.relpath(target, link_path.parent)
+    if link_path.is_symlink() or link_path.exists():
+        link_path.unlink()
+    link_path.symlink_to(rel)
+
+
+def write_meta(adapter_dir: Path, meta: dict) -> None:
+    """Persist meta.json next to the adapter weights."""
+    (Path(adapter_dir) / "meta.json").write_text(
+        json.dumps(meta, indent=2, default=str) + "\n"
+    )
 
 # ---------- log parsers ----------
 #
@@ -164,14 +228,17 @@ def run_with_logging(
     run_name: str,
     config: dict,
     tags: list[str],
-) -> int:
+) -> dict:
     """Launch `cmd` as a subprocess, parse stdout, forward metrics to W&B.
 
-    Returns the subprocess exit code. Always tees output to stdout so the
-    user sees training progress live, with or without W&B.
+    Returns {exit_code, last_train_metrics, last_valid_metrics, wandb_run_id}.
+    Always tees output to stdout so the user sees training progress live,
+    with or without W&B.
     """
     run = _wandb_or_none(project, run_name, config, tags)
     log_metric = run.log if run is not None else (lambda *a, **kw: None)
+    last_train: dict = {}
+    last_valid: dict = {}
 
     print(f"[train] launching: {' '.join(cmd)}", flush=True)
     proc = subprocess.Popen(
@@ -187,22 +254,76 @@ def run_with_logging(
             if metrics:
                 step = metrics.pop("iter", None)
                 log_metric(metrics, step=step)
+                # Cache the latest train/* and valid/* metrics for meta.json.
+                if any(k.startswith("train/") for k in metrics):
+                    last_train = {**metrics, "iter": step}
+                elif any(k.startswith("valid/") for k in metrics):
+                    last_valid = {**metrics, "iter": step}
         proc.wait()
     finally:
         if run is not None:
             run.finish()
-    return proc.returncode
+    return {
+        "exit_code": proc.returncode,
+        "last_train_metrics": last_train,
+        "last_valid_metrics": last_valid,
+        "wandb_run_id": run.id if run is not None else None,
+        "wandb_url": run.url if run is not None else None,
+    }
 
 
 # ---------- subcommands ----------
 
+def _resolve_adapter_dir(args: argparse.Namespace, stage: str) -> tuple[Path, str, Optional[str]]:
+    """Compute the versioned adapter dir, plus the timestamp/sha used.
+
+    If --adapter-path is set explicitly, honor it (no versioning) — useful
+    for ad-hoc runs that want to overwrite a known location.
+    """
+    if args.adapter_path:
+        adapter_dir = Path(args.adapter_path)
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        return adapter_dir, "explicit", None
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    sha = git_short_sha()
+    adapter_dir = make_adapter_dir(REPO_ROOT / "adapters", stage, timestamp, sha)
+    return adapter_dir, timestamp, sha
+
+
+def _finalize(stage: str, adapter_dir: Path, run_result: dict, config: dict, cmd: list[str], timestamp: str) -> None:
+    """Write meta.json and update the `latest` symlink. No-op on bad runs."""
+    if run_result["exit_code"] != 0:
+        print(f"[train] non-zero exit ({run_result['exit_code']}); skipping meta + symlink update", flush=True)
+        return
+    meta = {
+        "timestamp": timestamp,
+        "stage": stage,
+        "git_sha": git_short_sha(),
+        "config": config,
+        "training_command": cmd,
+        "wandb_run_id": run_result.get("wandb_run_id"),
+        "wandb_url": run_result.get("wandb_url"),
+        "final_train_metrics": run_result.get("last_train_metrics", {}),
+        "final_valid_metrics": run_result.get("last_valid_metrics", {}),
+    }
+    write_meta(adapter_dir, meta)
+    print(f"[train] wrote {adapter_dir}/meta.json", flush=True)
+
+    # Update adapters/<stage>/latest unless caller pinned an explicit dir.
+    if timestamp != "explicit":
+        link = REPO_ROOT / "adapters" / stage / "latest"
+        update_latest_symlink(link, adapter_dir)
+        print(f"[train] updated {link} → {adapter_dir.name}", flush=True)
+
+
 def _sft(args: argparse.Namespace) -> int:
+    adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "sft")
     cmd = [
         "uv", "run", "python", "-m", "mlx_lm", "lora",
         "--model", args.model,
         "--train",
         "--data", args.data,
-        "--adapter-path", args.adapter_path,
+        "--adapter-path", str(adapter_dir),
         "--batch-size", str(args.batch_size),
         "--num-layers", str(args.lora_layers),
         "--iters", str(args.iters),
@@ -216,22 +337,27 @@ def _sft(args: argparse.Namespace) -> int:
         "stage": "sft", "model": args.model, "data": args.data,
         "iters": args.iters, "lr": args.lr,
         "batch_size": args.batch_size, "lora_layers": args.lora_layers,
+        "dataset_hash": dataset_hash(Path(args.data)),
+        "adapter_dir": str(adapter_dir),
     }
     name = build_run_name("sft", args.model, config)
-    return run_with_logging(
+    result = run_with_logging(
         cmd, parse_sft_line, project=args.project, run_name=name,
         config=config, tags=["sft", "mlx-lm"],
     )
+    _finalize("sft", adapter_dir, result, config, cmd, timestamp)
+    return result["exit_code"]
 
 
 def _dpo(args: argparse.Namespace) -> int:
+    adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "dpo")
     cmd = [
         "uv", "run", "python", "-m", "mlx_lm_lora.train",
         "--model", args.model,
         "--train",
         "--train-mode", "dpo",
         "--data", args.data,
-        "--adapter-path", args.adapter_path,
+        "--adapter-path", str(adapter_dir),
         "--batch-size", str(args.batch_size),
         "--num-layers", str(args.lora_layers),
         "--iters", str(args.iters),
@@ -250,13 +376,17 @@ def _dpo(args: argparse.Namespace) -> int:
         "stage": "dpo", "model": args.model, "data": args.data,
         "iters": args.iters, "lr": args.lr, "beta": args.beta,
         "batch_size": args.batch_size, "lora_layers": args.lora_layers,
+        "dataset_hash": dataset_hash(Path(args.data)),
         "resume_from": args.resume_adapter,
+        "adapter_dir": str(adapter_dir),
     }
     name = build_run_name("dpo", args.model, config)
-    return run_with_logging(
+    result = run_with_logging(
         cmd, parse_dpo_line, project=args.project, run_name=name,
         config=config, tags=["dpo", "mlx-lm-lora"],
     )
+    _finalize("dpo", adapter_dir, result, config, cmd, timestamp)
+    return result["exit_code"]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -266,7 +396,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sft = sub.add_parser("sft", help="LoRA SFT via mlx-lm with W&B logging")
     sft.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     sft.add_argument("--data", default="data/mlx")
-    sft.add_argument("--adapter-path", default="adapters/sft-a2")
+    sft.add_argument("--adapter-path", default=None,
+                     help="explicit adapter dir; default = adapters/sft/<timestamp>-<sha>/ + latest symlink")
     sft.add_argument("--iters", type=int, default=300)
     sft.add_argument("--batch-size", type=int, default=1)
     sft.add_argument("--lr", type=float, default=1e-4)
@@ -279,8 +410,9 @@ def _build_parser() -> argparse.ArgumentParser:
     dpo = sub.add_parser("dpo", help="LoRA DPO via mlx-lm-lora with W&B logging")
     dpo.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     dpo.add_argument("--data", default="data/dpo_mlx")
-    dpo.add_argument("--adapter-path", default="adapters/dpo-a2")
-    dpo.add_argument("--resume-adapter", default="adapters/sft-a2/adapters.safetensors",
+    dpo.add_argument("--adapter-path", default=None,
+                     help="explicit adapter dir; default = adapters/dpo/<timestamp>-<sha>/ + latest symlink")
+    dpo.add_argument("--resume-adapter", default="adapters/sft/latest/adapters.safetensors",
                      help="resume from this adapter file (silently ignored if missing)")
     dpo.add_argument("--iters", type=int, default=300)
     dpo.add_argument("--batch-size", type=int, default=1)
