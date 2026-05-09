@@ -24,8 +24,12 @@ from pathlib import Path
 from statistics import mean
 from typing import Callable, Optional
 
-from prompts import SFT_SYSTEM_PROMPT
+from inference import build_prompt, clean_generation, load_model_with_adapter, make_generate_fn
 from verifier import DifficultyRankingTest, LocalJudge
+
+# Re-export so existing imports (`from eval_harness import build_eval_prompt`,
+# tests, etc.) keep working without churn.
+build_eval_prompt = build_prompt
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_EVAL_PATH = REPO_ROOT / "data" / "eval.jsonl"
@@ -101,39 +105,6 @@ def summarize(results: list[dict]) -> dict:
     }
 
 
-# Chat-template turn markers that mlx-lm sometimes emits without stopping
-# on. Gemma is the main offender (`<end_of_turn>`); the others are cheap
-# insurance for swapping models later.
-_STOP_MARKERS = ("<end_of_turn>", "<eos>", "<|im_end|>", "<|endoftext|>")
-
-
-def clean_generation(text: str) -> str:
-    """Strip everything from the first chat-template stop marker onward,
-    then trim whitespace. Without this, Gemma generations include hundreds
-    of trailing `<end_of_turn>` repeats and post-EOS garbage tokens."""
-    earliest = len(text)
-    for marker in _STOP_MARKERS:
-        i = text.find(marker)
-        if i != -1 and i < earliest:
-            earliest = i
-    return text[:earliest].strip()
-
-
-def build_eval_prompt(complex_text: str, tokenizer) -> str:
-    """Apply the model's chat template with the SFT system prompt.
-
-    `add_generation_prompt=True` tells the tokenizer to append the
-    assistant-turn prefix so the model knows to start generating.
-    """
-    messages = [
-        {"role": "system", "content": SFT_SYSTEM_PROMPT},
-        {"role": "user", "content": complex_text},
-    ]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True,
-    )
-
-
 # ---------- I/O wiring ----------
 
 def _load_eval_records(path: Path) -> list[dict]:
@@ -162,20 +133,8 @@ def _load_verifier_samples() -> dict[str, list[str]]:
 
 def _make_generate_fn(model_id: str, adapter_path: Optional[str], max_tokens: int) -> tuple[Callable, object]:
     """Return (generate_fn, tokenizer). adapter_path=None means base model."""
-    from mlx_lm import load, generate
-
-    print(f"[eval] loading {model_id}" + (f" + adapter {adapter_path}" if adapter_path else " (base, no adapter)"), flush=True)
-    if adapter_path:
-        model, tokenizer = load(model_id, adapter_path=adapter_path)
-    else:
-        model, tokenizer = load(model_id)
-
-    def gen(complex_text: str) -> str:
-        prompt = build_eval_prompt(complex_text, tokenizer)
-        out = generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
-        return clean_generation(out)
-
-    return gen, tokenizer
+    model, tokenizer = load_model_with_adapter(model_id, adapter_path)
+    return make_generate_fn(model, tokenizer, max_tokens=max_tokens), tokenizer
 
 
 def _format_report(summary: dict, results: list[dict], n_samples: int) -> str:

@@ -9,7 +9,9 @@ prompts.py        DISTILL_SYSTEM_PROMPT (long, for the teacher) and SFT_SYSTEM_P
 sources.py        Random Wikipedia paragraph fetcher
 distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo`
 mlx_data.py       Carve frozen eval set + convert generated JSONL into mlx-lm format
-train.py          Run mlx-lm / mlx-lm-lora training with W&B metric forwarding
+train.py          Run mlx-lm / mlx-lm-lora training with W&B metric forwarding + adapter versioning
+inference.py      Shared model-load + chat-template + clean-generation primitives
+generate.py       Ad-hoc simplification CLI (text arg / --file / stdin)
 eval_harness.py   Run an adapter on the held-out eval set and report % A2 / too-easy / too-hard
 verifier.py       CEFR judge + reward tests (DifficultyRanking, PacingVariety, length_ratio)
 dataset_audit.py  Audit a JSONL of pairs; reports per-record flags + aggregate stats
@@ -52,9 +54,13 @@ bash scripts/train_mlx.sh         # SFT
 bash scripts/train_dpo_mlx.sh     # DPO, resumes from SFT adapter
 
 # 6. Evaluate against the frozen held-out set (requires LM Studio).
-uv run python eval_harness.py --adapter base                # baseline
-uv run python eval_harness.py --adapter adapters/sft-a2     # SFT adapter
-uv run python eval_harness.py --adapter adapters/dpo-a2     # DPO adapter
+uv run python eval_harness.py --adapter base                  # baseline
+uv run python eval_harness.py --adapter adapters/sft/latest   # newest SFT adapter (versioned)
+uv run python eval_harness.py --adapter adapters/dpo/latest   # newest DPO adapter
+
+# 7. Ad-hoc inspection of a single adapter on arbitrary text.
+uv run python generate.py --adapter adapters/sft/latest --show-source "Complex paragraph..."
+cat input.txt | uv run python generate.py --adapter adapters/sft/latest
 ```
 
 ## Verifier / prompt iteration

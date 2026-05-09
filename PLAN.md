@@ -48,7 +48,7 @@ We are *not* using SARI, BLEU, or semantic-similarity metrics. Evaluation re-use
 *   [x] **Versioned outputs.** `train.py` writes adapters to `adapters/<stage>/<timestamp>-<sha>/` by default and updates `adapters/<stage>/latest` symlink on success. `meta.json` next to the weights records: stage, timestamp, git SHA, dataset hash, hyperparameters, full training command, W&B run ID + URL, final train and valid metrics. Pin a fixed dir via `ADAPTER_DIR=...` env or `--adapter-path` (skips versioning). DPO resume default updated to `adapters/sft/latest/...`.
 
 ### Inference
-*   Add `generate.py --adapter <path> "complex paragraph…"` so we can run any adapter on arbitrary text. Needed for debugging and ad-hoc qualitative review. *Deferred to after eval harness lands.*
+*   [x] **`generate.py`** runs any adapter (or `base`) on arbitrary text — positional, `--file`, or stdin. Multi-paragraph input is split on blank lines. Shared model-load / chat-template / output-cleaning primitives live in `inference.py` and are reused by `eval_harness.py`.
 
 ## Tech Stack
 *   **Base Model:** `mlx-community/gemma-3-1b-it-bf16`
