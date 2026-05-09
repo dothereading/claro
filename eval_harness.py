@@ -101,6 +101,24 @@ def summarize(results: list[dict]) -> dict:
     }
 
 
+# Chat-template turn markers that mlx-lm sometimes emits without stopping
+# on. Gemma is the main offender (`<end_of_turn>`); the others are cheap
+# insurance for swapping models later.
+_STOP_MARKERS = ("<end_of_turn>", "<eos>", "<|im_end|>", "<|endoftext|>")
+
+
+def clean_generation(text: str) -> str:
+    """Strip everything from the first chat-template stop marker onward,
+    then trim whitespace. Without this, Gemma generations include hundreds
+    of trailing `<end_of_turn>` repeats and post-EOS garbage tokens."""
+    earliest = len(text)
+    for marker in _STOP_MARKERS:
+        i = text.find(marker)
+        if i != -1 and i < earliest:
+            earliest = i
+    return text[:earliest].strip()
+
+
 def build_eval_prompt(complex_text: str, tokenizer) -> str:
     """Apply the model's chat template with the SFT system prompt.
 
@@ -155,7 +173,7 @@ def _make_generate_fn(model_id: str, adapter_path: Optional[str], max_tokens: in
     def gen(complex_text: str) -> str:
         prompt = build_eval_prompt(complex_text, tokenizer)
         out = generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
-        return out.strip()
+        return clean_generation(out)
 
     return gen, tokenizer
 

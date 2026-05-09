@@ -100,6 +100,39 @@ class TestSummarize:
         assert s["pct_a2"] == 0.0
 
 
+class TestCleanGeneration:
+    """mlx-lm doesn't always stop at chat-template turn markers — Gemma in
+    particular emits <end_of_turn> and then keeps generating garbage until
+    max_tokens. We post-process to strip everything from the first stop
+    token onward."""
+
+    def test_truncates_at_end_of_turn(self):
+        raw = "Real output here.<end_of_turn>noise noise noise"
+        assert eval_mod.clean_generation(raw) == "Real output here."
+
+    def test_truncates_at_eos(self):
+        raw = "Real output.<eos>more noise"
+        assert eval_mod.clean_generation(raw) == "Real output."
+
+    def test_truncates_at_im_end(self):
+        raw = "Output.<|im_end|>tail"
+        assert eval_mod.clean_generation(raw) == "Output."
+
+    def test_handles_repeated_markers(self):
+        raw = "Good text.<end_of_turn><end_of_turn><end_of_turn>"
+        assert eval_mod.clean_generation(raw) == "Good text."
+
+    def test_strips_whitespace(self):
+        assert eval_mod.clean_generation("  hello  \n") == "hello"
+
+    def test_no_marker_returns_full_text(self):
+        assert eval_mod.clean_generation("Plain output here.") == "Plain output here."
+
+    def test_takes_earliest_marker(self):
+        raw = "Text<end_of_turn>middle<eos>tail"
+        assert eval_mod.clean_generation(raw) == "Text"
+
+
 class TestBuildEvalPrompt:
     def test_uses_sft_system_prompt(self):
         class FakeTokenizer:
