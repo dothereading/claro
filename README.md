@@ -8,7 +8,8 @@ Fine-tune a small Gemma model to rewrite complex English at **CEFR A2** (Element
 prompts.py        DISTILL_SYSTEM_PROMPT (long, for the teacher) and SFT_SYSTEM_PROMPT (short, baked into training)
 sources.py        Random Wikipedia paragraph fetcher
 distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo`
-mlx_data.py       Convert generated JSONL into mlx-lm / mlx-lm-lora training format
+mlx_data.py       Carve frozen eval set + convert generated JSONL into mlx-lm format
+train.py          Run mlx-lm / mlx-lm-lora training with W&B metric forwarding
 verifier.py       CEFR judge + reward tests (DifficultyRanking, PacingVariety, length_ratio)
 dataset_audit.py  Audit a JSONL of pairs; reports per-record flags + aggregate stats
 iterate.py        Single-paragraph qualitative prompt-iteration tool
@@ -43,7 +44,8 @@ uv run python mlx_data.py carve-eval --n 30
 uv run python mlx_data.py sft
 uv run python mlx_data.py dpo
 
-# 5. Train (from repo root)
+# 5. Train (from repo root). Both routes go through train.py, which forwards
+#    metrics to Weights & Biases live. Set WANDB_MODE=disabled to opt out.
 bash scripts/train_mlx.sh         # SFT
 bash scripts/train_dpo_mlx.sh     # DPO, resumes from SFT adapter
 ```

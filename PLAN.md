@@ -43,7 +43,7 @@ We are *not* using SARI, BLEU, or semantic-similarity metrics. Evaluation re-use
 *   Secondary signals: length distribution, qualitative samples.
 
 ### Observability
-*   Wire **Weights & Biases** into both training scripts so loss / val-loss / DPO accuracy / DPO margin stream live, with one project per training mode (e.g. `lang-simp-sft`, `lang-simp-dpo`). API key in `.env` as `WANDB_API_KEY`.
+*   [x] **W&B wired in** via `train.py`. Wraps the underlying mlx-lm / mlx-lm-lora subprocess, parses log lines with regex, forwards metrics live to W&B (projects `lang-simp-sft` and `lang-simp-dpo`). Run names include timestamp, stage, short model name, iters, lr, beta. Offline-safe: missing API key or `WANDB_MODE=disabled` falls back to plain stdout-only training. Shell scripts now call `train.py`; the env-var override pattern is preserved.
 
 ### Adapter management
 *   Adapters currently overwrite `adapters/sft-a2/` and `adapters/dpo-a2/`. Move to per-run directories named with timestamp + key hyperparams + git SHA, with a `meta.json` next to the weights recording the dataset hash, hyperparameters, and run ID. Pin a `latest` symlink for convenience.

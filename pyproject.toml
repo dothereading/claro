@@ -12,6 +12,7 @@ dependencies = [
     "mlx-lm>=0.31.3",
     "datasets>=4.3.0",
     "mlx-lm-lora>=2.1.0",
+    "wandb>=0.18",
 ]
 
 [dependency-groups]
