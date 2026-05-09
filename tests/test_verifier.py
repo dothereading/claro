@@ -132,6 +132,47 @@ class TestDifficultyRanking:
         assert "CANDIDATE_MARKER" in judge.calls[0]
 
 
+class TestDifficultyRankingClassify:
+    """`classify()` returns the level *label* — the eval harness needs this
+    information (not just the binary 1.0/0.0 from run())."""
+
+    def _t(self):
+        return DifficultyRankingTest(
+            a1_samples=["short"], b1_samples=["long"], a2_samples=["med"],
+        )
+
+    def test_returns_level_string(self):
+        t = self._t()
+        assert t.classify("text", StubJudge({"level": "A2"})) == "A2"
+        assert t.classify("text", StubJudge({"level": "B1"})) == "B1"
+        assert t.classify("text", StubJudge({"level": "A1"})) == "A1"
+
+    def test_normalizes_b2_variants_to_b2plus(self):
+        t = self._t()
+        for lab in ["B2", "C1", "C2", "C1+"]:
+            assert t.classify("x", StubJudge({"level": lab})) == "B2+"
+
+    def test_normalizes_below_a1_variants(self):
+        t = self._t()
+        for lab in ["BELOW A1", "PRE-A1", "<<A1"]:
+            assert t.classify("x", StubJudge({"level": lab})) == "<A1"
+
+    def test_unrecognized_returns_NA(self):
+        t = self._t()
+        assert t.classify("x", StubJudge({"level": "QQQ"})) == "NA"
+        assert t.classify("x", StubJudge({})) == "NA"
+
+    def test_run_and_classify_agree(self):
+        # Whatever level classify returns, run scores 1.0 iff that level is A2
+        t = self._t()
+        for lab in ["A2", "A1", "B1", "B2", "QQQ"]:
+            judge = StubJudge({"level": lab})
+            classified = t.classify("x", judge)
+            judge2 = StubJudge({"level": lab})
+            scored = t.run("x", judge2)
+            assert (scored == 1.0) == (classified == "A2")
+
+
 class TestPacingVariety:
     def setup_method(self):
         self.t = PacingVarietyTest()

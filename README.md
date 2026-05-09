@@ -10,6 +10,7 @@ sources.py        Random Wikipedia paragraph fetcher
 distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo`
 mlx_data.py       Carve frozen eval set + convert generated JSONL into mlx-lm format
 train.py          Run mlx-lm / mlx-lm-lora training with W&B metric forwarding
+eval_harness.py   Run an adapter on the held-out eval set and report % A2 / too-easy / too-hard
 verifier.py       CEFR judge + reward tests (DifficultyRanking, PacingVariety, length_ratio)
 dataset_audit.py  Audit a JSONL of pairs; reports per-record flags + aggregate stats
 iterate.py        Single-paragraph qualitative prompt-iteration tool
@@ -18,6 +19,7 @@ tests/            pytest suite (run with `uv run pytest`)
 data/             Generated datasets (gitignored)
 adapters/         Trained LoRA adapters (gitignored)
 logs/             Training logs (gitignored)
+eval_results/     Per-adapter eval JSON + summaries (gitignored)
 ```
 
 ## Setup
@@ -48,6 +50,11 @@ uv run python mlx_data.py dpo
 #    metrics to Weights & Biases live. Set WANDB_MODE=disabled to opt out.
 bash scripts/train_mlx.sh         # SFT
 bash scripts/train_dpo_mlx.sh     # DPO, resumes from SFT adapter
+
+# 6. Evaluate against the frozen held-out set (requires LM Studio).
+uv run python eval_harness.py --adapter base                # baseline
+uv run python eval_harness.py --adapter adapters/sft-a2     # SFT adapter
+uv run python eval_harness.py --adapter adapters/dpo-a2     # DPO adapter
 ```
 
 ## Verifier / prompt iteration

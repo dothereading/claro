@@ -37,10 +37,9 @@ GRPO loop and reward components are not yet implemented; tracked in the task lis
 ### Phase 5: Held-out Evaluation
 We are *not* using SARI, BLEU, or semantic-similarity metrics. Evaluation re-uses the same CEFR-judge approach as `verifier.DifficultyRankingTest`:
 
-*   Frozen evaluation set of complex paragraphs (carved from `data/sft.jsonl` before any further data generation).
-*   For each adapter under test (base, SFT, DPO, GRPO): generate a simplification per held-out prompt, then run `DifficultyRankingTest` to label A1/A2/B1+.
-*   Primary metric: **% of outputs labeled A2** by the judge.
-*   Secondary signals: length distribution, qualitative samples.
+*   [x] Frozen evaluation set of 30 paragraphs at `data/eval.jsonl` (deterministic carve, refuses to overwrite).
+*   [x] **`eval_harness.py`**: loads base + optional LoRA, runs each held-out prompt, classifies output via `DifficultyRankingTest.classify()` (refactored to expose the level label, not just the binary score). Reports % A2, % too-easy (A1 + <A1), % too-hard (B1 + B2+), mean length ratio, and one sample per category. Persists JSON to `eval_results/<adapter>_<timestamp>.json`.
+*   [ ] Run baseline (base / SFT / DPO) once to establish current numbers.
 
 ### Observability
 *   [x] **W&B wired in** via `train.py`. Wraps the underlying mlx-lm / mlx-lm-lora subprocess, parses log lines with regex, forwards metrics live to W&B (projects `lang-simp-sft` and `lang-simp-dpo`). Run names include timestamp, stage, short model name, iters, lr, beta. Offline-safe: missing API key or `WANDB_MODE=disabled` falls back to plain stdout-only training. Shell scripts now call `train.py`; the env-var override pattern is preserved.

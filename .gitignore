@@ -10,3 +10,5 @@ adapters/
 .pytest_cache/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+wandb/
+eval_results/

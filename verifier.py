@@ -182,18 +182,35 @@ class DifficultyRankingTest(BaseTest):
         self.a2_samples = [truncate_to_words(s, n_words) for s in (a2_samples or [])]
         self.n_words = n_words
 
-    def run(self, text: str, judge: BaseJudge) -> float:
+    def _judge_call(self, text: str, judge: BaseJudge) -> Dict[str, Any]:
         excerpt = truncate_to_words(text, self.n_words)
         prompt = self._build_prompt(excerpt)
-        result = judge.evaluate(prompt)
-        level = (result.get("level") or "").strip().upper().replace("B2", "B2+") if result.get("level") else ""
-        # Normalize a few common variants the judge may emit.
+        return judge.evaluate(prompt)
+
+    def _normalize_level(self, result: Dict[str, Any]) -> str:
+        raw = result.get("level") if isinstance(result, dict) else None
+        level = (raw or "").strip().upper().replace("B2", "B2+") if raw else ""
         if level in {"BELOW A1", "PRE-A1", "<<A1"}: level = "<A1"
         if level in {"B2", "B2+", "C1", "C2", "C1+", "C2+"}: level = "B2+"
-        feats = result.get("complex_features", "")
-        print(f"[judge] level={level!r} feats={str(feats)[:120]}")
         if level not in self.VALID_LEVELS:
-            print(f"[warn] unrecognized level {level!r} — scoring 0")
+            return "NA"
+        return level
+
+    def classify(self, text: str, judge: BaseJudge) -> str:
+        """Return the CEFR level label ('A1', 'A2', 'B1', 'B2+', '<A1', or 'NA').
+
+        Used by the eval harness: we want the actual label, not a binary score,
+        so we can distinguish too-easy from too-hard failures.
+        """
+        return self._normalize_level(self._judge_call(text, judge))
+
+    def run(self, text: str, judge: BaseJudge) -> float:
+        result = self._judge_call(text, judge)
+        level = self._normalize_level(result)
+        feats = result.get("complex_features", "") if isinstance(result, dict) else ""
+        print(f"[judge] level={level!r} feats={str(feats)[:120]}")
+        if level == "NA":
+            print(f"[warn] unrecognized level — scoring 0")
             return 0.0
         return 1.0 if level == "A2" else 0.0
 
