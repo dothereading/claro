@@ -1,0 +1,25 @@
+[project]
+name = "language-simplification-llm"
+version = "0.1.0"
+description = "Fine-tune a small Gemma model to rewrite English at CEFR A2 level."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.33.1",
+    "openai>=1.55.0",
+    "python-dotenv>=1.0.1",
+    "mlx>=0.31.2",
+    "mlx-lm>=0.31.3",
+    "datasets>=4.3.0",
+    "mlx-lm-lora>=2.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
