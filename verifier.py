@@ -5,6 +5,41 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from typing import List, Dict, Any, Optional
 
+# --- Sentence-level helpers ---
+
+def split_sentences(text: str) -> list[str]:
+    """Split on sentence-ending punctuation followed by whitespace.
+
+    Naive but good enough for English prose at this size; robust parsing
+    isn't worth the dependency cost for what we use it for.
+    """
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [p for p in parts if p]
+
+
+def length_ratio_score(
+    source: str,
+    output: str,
+    soft_cap: float = 1.3,
+    hard_cap: float = 2.0,
+) -> float:
+    """Reward 1.0 while output/source word ratio ≤ soft_cap; decays linearly to
+    0 by hard_cap. Catches simplifications that pad rather than condense.
+
+    Defaults are loose: A2 simplification often unpacks clauses and grows
+    ~1.2-1.3×, so penalty only kicks in past 1.3×.
+    """
+    src_words = len(_clean(source).split())
+    if src_words == 0:
+        return 0.0
+    out_words = len(_clean(output).split())
+    ratio = out_words / src_words
+    if ratio <= soft_cap:
+        return 1.0
+    if ratio >= hard_cap:
+        return 0.0
+    return 1.0 - (ratio - soft_cap) / (hard_cap - soft_cap)
+
 # --- Abstract Base Classes for Extensibility ---
 
 class BaseJudge(ABC):
@@ -90,6 +125,35 @@ def windowed_excerpts(text: str, n_words: int = 100, n_windows: int = 3) -> List
         seen.add(s)
         out.append(" ".join(words[s:s + n_words]))
     return out
+
+
+class PacingVarietyTest(BaseTest):
+    """Score sentence-opening diversity, 0..1.
+
+    Heuristic: take the first `opening_tokens` words of each sentence
+    (lowercased). The more sentences share an opening, the lower the score.
+    Uses 1 - sum(p_i^2) over opening counts (an HHI-style diversity index).
+
+    Deliberately *general*: it doesn't pattern-match specific phrases, so the
+    distillation prompt can't game it by token-substitution. A model that
+    produces "X is Y. Z is W. P is Q." rhythms will score low regardless of
+    which nouns it uses.
+    """
+
+    def __init__(self, opening_tokens: int = 2):
+        self.opening_tokens = opening_tokens
+
+    def run(self, text: str, judge: Optional[BaseJudge] = None) -> float:
+        sentences = split_sentences(text)
+        if len(sentences) < 2:
+            return 1.0
+        openings: list[tuple[str, ...]] = []
+        for s in sentences:
+            tokens = re.findall(r"\w+", s.lower())[: self.opening_tokens]
+            openings.append(tuple(tokens))
+        counts = Counter(openings)
+        total = len(openings)
+        return 1.0 - sum((c / total) ** 2 for c in counts.values())
 
 
 class DifficultyRankingTest(BaseTest):

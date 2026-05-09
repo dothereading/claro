@@ -1,51 +1,62 @@
-# Project Plan: Language Simplification LLM (Gemma 4 E2B)
+# Project Plan: Language Simplification LLM
 
 ## Goal
-Fine-tune **Gemma 4 E2B** to perform language simplification, transforming complex text into **CEFR A2 level (Elementary English)**. The model must optimize for brevity and simplicity while strictly preserving semantic meaning. The project will compare "Non-Thinking" vs "REASONING" model modes.
+Fine-tune a small Gemma model to perform language simplification, transforming complex text into **CEFR A2 level (Elementary English)**. The model must optimize for brevity and simplicity while preserving semantic meaning. The project will compare "Non-Thinking" vs "REASONING" modes.
+
+**Base model (committed):** `mlx-community/gemma-3-1b-it-bf16`. Gemma 4 E2B was the original target but is broken in mlx-lm 0.31.3 (k/v projection mismatch). We are not waiting on that.
 
 ## Core Pipeline
 
 ### Phase 1: Data Preparation (Synthetic/Distillation)
 *   [x] Wikipedia source wired up (`sources.py`); ArXiv still TODO.
 *   [x] Teacher distillation through OpenRouter (`distill.py`, `Teacher` class). Opus produces `chosen`; weaker model (Gemma-3-4B) produces `rejected`.
-*   [x] SFT dataset: 194 pairs in `data/sft.jsonl`.
+*   [x] SFT dataset: 194 pairs in `data/sft.jsonl` (Opus, original prompt). Future generations use the iterated prompt.
 *   [x] DPO preference dataset: 194 triples in `data/dpo.jsonl`.
+*   [x] **Distillation prompt iterated**: dropped low-info detail aggressively, killed redundant cappers, raised A2-floor guidance, encouraged adult register and concept-first ordering. A/B test on a fixed 10-paragraph sample showed length-ratio score 0.957→0.982 and judge A2 hit-rate 6/10→7/10.
+*   [x] **Data-quality validator** (`dataset_audit.py`): flags `length_inflated`, `monotonous`, `too_easy`, `too_hard` per record; reports aggregates.
+*   [ ] Carve a frozen evaluation set out of `data/sft.jsonl` *before* generating any more data, so the eval prompts never appear in training. SFT and DPO splits must agree on which prompts go to which split.
+*   [ ] Grow SFT dataset (target ≥1k pairs) to combat the val-loss climb seen in the current run.
 
 ### Phase 2: Supervised Fine-Tuning (SFT)
-*   **Model:** Currently `mlx-community/gemma-3-1b-it-bf16` (Gemma 4 E2B is broken in mlx-lm 0.31.3 — k/v proj mismatch). Plan target was Gemma 4 E2B; revisit when fixed upstream.
-*   **Engine:** mlx-lm LoRA (`scripts/train_mlx.sh`). Unsloth path was removed.
-*   **Status:** trained 300 iters; train loss 0.2–0.5, val loss climbing 1.9 → 2.4 → likely overfitting on 90 train rows. More data needed.
+*   **Engine:** mlx-lm LoRA (`scripts/train_mlx.sh`).
+*   **Status:** trained 300 iters; train loss 0.2–0.5, val loss climbing 1.9 → 2.4 → likely overfitting on 90 train rows. Re-run after dataset grows.
+*   **Note:** `mlx_data.py sft` now defaults to using *all* rows; the existing adapter was trained on a 100-row subset. To reproduce: pass `--n 100`.
 
-### Phase 3: Reinforcement Learning (GRPO)
-Using **Group Relative Policy Optimization** to optimize against three specific reward components via an **E2B-based Reward Verifier**:
+### Phase 3: Reinforcement Learning (GRPO) — *backlog*
+GRPO loop and reward components are not yet implemented; tracked in the task list. The CEFR-difficulty judge in `verifier.py` will be reward D when this lands.
 
-1.  **Reward A: Length Constraint ($\text{R}_{\text{len}}$)**
-    *   Penalty starts for sentences $> 10$ words.
-    *   Penalty increases monotonically as sentence length grows.
-2.  **Reward B: Vocabulary Simplicity ($\text{R}_{\text{vocab}}$)**
-    *   Identify "uncommon" words using frequency/difficulty metrics.
-    *   Constraint: Maximum of 1 or 2 uncommon words per sentence; otherwise, apply penalty.
-3.  **Reward C: Semantic Preservation ($\text{R}_{\text{meaning}}$)**
-    *   **Method:** Use an independent "Judge" (via E2B) to compare the source and simplified text.
-    *   Check for information loss or hallucinated additions.
-4.  **Reward D: Difficulty Ranking/Ordering ($\text{R}_{\text{difficulty}}$)**
-    *   **Method:** An LLM judge ranks a set of rollouts (e.g., A1, A2, and B1 versions).
-    *   **Objective:** Ensure the model's output correctly sits within the target A2 difficulty tier by rewarding correct ordinal ranking of complexity levels.
+1.  **Reward A: Length Constraint** — penalty for sentences > 10 words, monotonically increasing.
+2.  **Reward B: Vocabulary Simplicity** — penalty when more than 1–2 uncommon words appear in a sentence (frequency-list based).
+3.  **Reward C: Semantic Preservation** — independent judge compares source vs. simplification for info loss / hallucination.
+4.  **Reward D: Difficulty Ranking** — LM judge labels output as A1 / A2 / B1; reward rewards A2. Implemented in `verifier.DifficultyRankingTest`.
 
 ### Phase 4: Preference Alignment (DPO)
 *   **Engine:** mlx-lm-lora (`scripts/train_dpo_mlx.sh`), resumes from the SFT adapter.
-*   **Status:** trained 300 iters with β=0.1; train loss saturated at 0.000 / accuracy 1.0 very early; val rewards near zero. Suspicious — needs eval against held-out prompts before trusting.
+*   **Status:** trained 300 iters with β=0.1; train loss saturated at 0.000 / accuracy 1.0 very early. Suspicious — likely the model is learning surface differences (length, punctuation) between Opus and Gemma-3-4B rather than simplification quality. Needs held-out CEFR-judge evaluation before re-running.
 
-### Phase 5: Comparative Analysis
-*   [ ] Run evaluation on **Non-Thinking** Gemma 4 E2B.
-*   [ ] Run evaluation on **Thinking** Gemma 4 E2B (using `<|thought|>` tokens).
-*   [ ] Metric comparison: SARI, BLEU, and Semantic Similarity across both modes.
+### Phase 5: Held-out Evaluation
+We are *not* using SARI, BLEU, or semantic-similarity metrics. Evaluation re-uses the same CEFR-judge approach as `verifier.DifficultyRankingTest`:
+
+*   Frozen evaluation set of complex paragraphs (carved from `data/sft.jsonl` before any further data generation).
+*   For each adapter under test (base, SFT, DPO, GRPO): generate a simplification per held-out prompt, then run `DifficultyRankingTest` to label A1/A2/B1+.
+*   Primary metric: **% of outputs labeled A2** by the judge.
+*   Secondary signals: length distribution, qualitative samples.
+
+### Observability
+*   Wire **Weights & Biases** into both training scripts so loss / val-loss / DPO accuracy / DPO margin stream live, with one project per training mode (e.g. `lang-simp-sft`, `lang-simp-dpo`). API key in `.env` as `WANDB_API_KEY`.
+
+### Adapter management
+*   Adapters currently overwrite `adapters/sft-a2/` and `adapters/dpo-a2/`. Move to per-run directories named with timestamp + key hyperparams + git SHA, with a `meta.json` next to the weights recording the dataset hash, hyperparameters, and run ID. Pin a `latest` symlink for convenience.
+
+### Inference
+*   Add `generate.py --adapter <path> "complex paragraph…"` so we can run any adapter on arbitrary text. Needed for debugging and ad-hoc qualitative review. *Deferred to after eval harness lands.*
 
 ## Tech Stack
-*   **Base Model:** Currently Gemma-3-1B-it (mlx); target Gemma 4 E2B once mlx-lm support lands.
+*   **Base Model:** `mlx-community/gemma-3-1b-it-bf16`
 *   **Training Engine:** mlx-lm + mlx-lm-lora (LoRA)
-*   **RL Framework:** GRPO (not yet implemented)
+*   **RL Framework:** GRPO (backlog)
 *   **Preference Alignment:** DPO via mlx-lm-lora
-*   **Reward Sandbox:** local LM Studio judge (CEFR difficulty ranking); other rewards TBD
+*   **Reward Sandbox:** local LM Studio judge (CEFR difficulty ranking)
+*   **Observability:** Weights & Biases
 *   **Dependency Management:** `uv`
 *   **Tests:** `pytest` (mocked OpenAI client + mocked judge)

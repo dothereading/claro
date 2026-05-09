@@ -13,8 +13,10 @@ from verifier import (
     BaseJudge,
     DifficultyRankingTest,
     LocalJudge,
+    PacingVarietyTest,
     RewardVerifier,
     _clean,
+    length_ratio_score,
     truncate_to_words,
     windowed_excerpts,
 )
@@ -128,6 +130,77 @@ class TestDifficultyRanking:
         judge = StubJudge({"level": "A2"})
         t.run("CANDIDATE_MARKER text here", judge)
         assert "CANDIDATE_MARKER" in judge.calls[0]
+
+
+class TestPacingVariety:
+    def setup_method(self):
+        self.t = PacingVarietyTest()
+
+    def test_all_same_opening_scores_zero(self):
+        # Four sentences starting "It is" → no variety
+        text = "It is red. It is blue. It is green. It is gold."
+        assert self.t.run(text, judge=None) == pytest.approx(0.0)
+
+    def test_all_distinct_openings_score_high(self):
+        text = "Bob ran fast. The cat slept. Snow fell hard. Cars passed by."
+        # 4 unique openings → 1 - 4*(1/4)^2 = 0.75
+        assert self.t.run(text, judge=None) == pytest.approx(0.75)
+
+    def test_partial_repetition(self):
+        # 3x "It is" and 1x "Snow fell" → 1 - ((3/4)^2 + (1/4)^2) = 1 - 0.625 = 0.375
+        text = "It is hot. It is bright. It is loud. Snow fell down."
+        assert self.t.run(text, judge=None) == pytest.approx(0.375)
+
+    def test_single_sentence_returns_one(self):
+        assert self.t.run("Just one sentence here.", judge=None) == 1.0
+
+    def test_empty_text_returns_one(self):
+        # No sentences to be monotonous about; don't penalize.
+        assert self.t.run("", judge=None) == 1.0
+
+    def test_ignores_internal_punctuation(self):
+        # Comma-separated clauses inside a single sentence don't count as separate sentences.
+        text = "Bob ran, jumped, and slept. Cats prowl at night."
+        assert self.t.run(text, judge=None) == pytest.approx(0.5)
+
+
+class TestLengthRatioScore:
+    def test_output_shorter_than_source_scores_one(self):
+        assert length_ratio_score("a b c d e f", "a b c") == 1.0
+
+    def test_output_equal_length_scores_one(self):
+        assert length_ratio_score("a b c", "x y z") == 1.0
+
+    def test_within_soft_cap_scores_one(self):
+        # Default soft_cap=1.3; output 1.2x source → no penalty
+        src = " ".join(["w"] * 10)
+        out = " ".join(["w"] * 12)
+        assert length_ratio_score(src, out) == 1.0
+
+    def test_at_hard_cap_scores_zero(self):
+        src = " ".join(["w"] * 10)
+        out = " ".join(["w"] * 20)  # 2x → hard cap default
+        assert length_ratio_score(src, out) == pytest.approx(0.0)
+
+    def test_between_soft_and_hard_cap_decays_linearly(self):
+        # Default soft=1.3, hard=2.0. Ratio 1.65 is halfway → score 0.5
+        src = " ".join(["w"] * 100)
+        out = " ".join(["w"] * 165)
+        assert length_ratio_score(src, out) == pytest.approx(0.5, abs=0.01)
+
+    def test_past_hard_cap_clamps_to_zero(self):
+        src = " ".join(["w"] * 10)
+        out = " ".join(["w"] * 50)  # 5x
+        assert length_ratio_score(src, out) == 0.0
+
+    def test_empty_source_returns_zero(self):
+        assert length_ratio_score("", "anything") == 0.0
+
+    def test_custom_caps(self):
+        src = " ".join(["w"] * 10)
+        out = " ".join(["w"] * 11)  # 1.1x
+        # With soft=1.0, hard=1.2, ratio 1.1 is halfway → 0.5
+        assert length_ratio_score(src, out, soft_cap=1.0, hard_cap=1.2) == pytest.approx(0.5, abs=0.01)
 
 
 class TestRewardVerifier:

@@ -231,7 +231,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sft.add_argument("--n", type=int, default=200)
     sft.add_argument("--output", default=str(REPO_ROOT / "data" / "sft.jsonl"))
     sft.add_argument("--append", action="store_true")
-    sft.add_argument("--model", default="anthropic/claude-opus-latest")
+    sft.add_argument("--model", default="~anthropic/claude-opus-latest")
     sft.add_argument("--concurrency", type=int, default=8)
     sft.add_argument("--max-retries", type=int, default=3)
     sft.add_argument("--temperature", type=float, default=0.4)

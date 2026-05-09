@@ -9,9 +9,10 @@ prompts.py        DISTILL_SYSTEM_PROMPT (long, for the teacher) and SFT_SYSTEM_P
 sources.py        Random Wikipedia paragraph fetcher
 distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo`
 mlx_data.py       Convert generated JSONL into mlx-lm / mlx-lm-lora training format
-verifier.py       CEFR judge + reward tests (currently DifficultyRanking)
-iterate.py        Single-paragraph prompt-iteration tool
-scripts/          Shell entrypoints for mlx-lm and mlx-lm-lora training
+verifier.py       CEFR judge + reward tests (DifficultyRanking, PacingVariety, length_ratio)
+dataset_audit.py  Audit a JSONL of pairs; reports per-record flags + aggregate stats
+iterate.py        Single-paragraph qualitative prompt-iteration tool
+scripts/          Shell entrypoints for mlx-lm/mlx-lm-lora training, plus iterate_prompt.py
 tests/            pytest suite (run with `uv run pytest`)
 data/             Generated datasets (gitignored)
 adapters/         Trained LoRA adapters (gitignored)
@@ -45,10 +46,26 @@ bash scripts/train_dpo_mlx.sh     # DPO, resumes from SFT adapter
 
 ## Verifier / prompt iteration
 
-`verifier.py` runs CEFR-level classification through a local LM Studio judge (`http://127.0.0.1:1234`). Use `iterate.py` to compare prompt variants against a single paragraph:
+`verifier.py` runs CEFR-level classification through a local LM Studio judge (`http://127.0.0.1:1234`) and exposes pure-Python signals (`PacingVarietyTest`, `length_ratio_score`).
+
+Use `iterate.py` to compare prompt variants on a single paragraph (qualitative):
 
 ```bash
 uv run python iterate.py --runs 4
+```
+
+Use `dataset_audit.py` to score a whole dataset and surface the worst examples:
+
+```bash
+uv run python dataset_audit.py data/sft.jsonl                  # length + pacing only
+uv run python dataset_audit.py data/sft.jsonl --with-judge     # also CEFR-level (needs LM Studio)
+```
+
+For A/B-testing prompt edits against the existing dataset:
+
+```bash
+uv run python scripts/iterate_prompt.py --n 10
+uv run python dataset_audit.py data/sft_new_prompt.jsonl --with-judge
 ```
 
 ## Tests
