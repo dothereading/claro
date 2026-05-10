@@ -13,6 +13,7 @@ dependencies = [
     "datasets>=4.3.0",
     "mlx-lm-lora>=2.1.0",
     "wandb>=0.18",
+    "wordfreq>=3.1",
 ]
 
 [dependency-groups]
