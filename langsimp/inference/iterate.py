@@ -9,6 +9,7 @@ Usage:
     uv run python -m langsimp.inference.iterate --runs 4 --seed 42
     uv run python -m langsimp.inference.iterate --runs 4 --paragraph-file my_paragraph.txt
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,8 +18,8 @@ import json
 from pathlib import Path
 
 from langsimp.data.distill import Teacher
-from langsimp.prompts import DISTILL_SYSTEM_PROMPT
 from langsimp.data.sources import fetch_random_paragraphs
+from langsimp.prompts import DISTILL_SYSTEM_PROMPT
 from langsimp.verifier import DifficultyRankingTest, LocalJudge, RewardVerifier
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,9 +43,14 @@ async def run(args: argparse.Namespace) -> None:
         paragraph = Path(args.paragraph_file).read_text().strip()
         title, url = "(local file)", args.paragraph_file
     else:
-        wp = next(fetch_random_paragraphs(
-            n=1, min_words=args.min_words, max_words=args.max_words, seed=args.seed,
-        ))
+        wp = next(
+            fetch_random_paragraphs(
+                n=1,
+                min_words=args.min_words,
+                max_words=args.max_words,
+                seed=args.seed,
+            )
+        )
         paragraph, title, url = wp.text, wp.title, wp.url
 
     print("=" * 80)
@@ -56,17 +62,21 @@ async def run(args: argparse.Namespace) -> None:
     print("=" * 80)
 
     teacher = Teacher.from_env(model=args.model, temperature=args.temperature, max_retries=1)
-    outputs = await asyncio.gather(*[
-        teacher.simplify(DISTILL_SYSTEM_PROMPT, paragraph) for _ in range(args.runs)
-    ])
+    outputs = await asyncio.gather(
+        *[teacher.simplify(DISTILL_SYSTEM_PROMPT, paragraph) for _ in range(args.runs)]
+    )
 
     samples = load_verifier_samples()
     judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
     verifier = RewardVerifier(judge)
-    verifier.add_test(DifficultyRankingTest(
-        a1_samples=samples["A1"], b1_samples=samples["B1"], a2_samples=samples["A2"],
-        n_words=100,
-    ))
+    verifier.add_test(
+        DifficultyRankingTest(
+            a1_samples=samples["A1"],
+            b1_samples=samples["B1"],
+            a2_samples=samples["A2"],
+            n_words=100,
+        )
+    )
 
     for i, out in enumerate(outputs, 1):
         print(f"\n--- RUN {i}/{args.runs} ({len(out.split()) if out else 0} words) ---")

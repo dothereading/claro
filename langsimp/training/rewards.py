@@ -16,13 +16,13 @@ is in place; their numeric behavior is TODO.
 The bottom of the file contains thin `@register_reward_function`-style
 adapters that mlx_lm_lora.train can discover via --reward-functions-file.
 """
+
 from __future__ import annotations
 
 import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 
 from wordfreq import top_n_list
 
@@ -49,26 +49,33 @@ class RewardContext:
     """Per-rollout context. Source = the complex paragraph the model is
     rewriting. Answer = optional reference simplification (Opus chosen)
     that some rewards may compare against; not used in v1."""
+
     source: str
-    answer: Optional[str] = None
+    answer: str | None = None
 
 
 class RewardComponent(ABC):
     """Single reward component. Returns a float in [0, 1]."""
+
     name: str = "reward"
 
     @abstractmethod
     def compute(
-        self, output: str, ctx: RewardContext, judge: Optional[BaseJudge] = None,
+        self,
+        output: str,
+        ctx: RewardContext,
+        judge: BaseJudge | None = None,
     ) -> float: ...
 
 
 # ---------- LengthVsSourceReward ----------
 
+
 class LengthVsSourceReward(RewardComponent):
     """Reward 1.0 when output_words/source_words is within [floor, ceiling],
     decaying linearly outside. Penalizes both excessive condensation
     (model dropped content) and excessive padding (model expanded source)."""
+
     name = "length"
 
     def __init__(
@@ -124,9 +131,12 @@ class VocabSimplicityReward(RewardComponent):
     Defaults (top_n=3000, allowed=1, severity=0.5) calibrated against
     chosen/rejected/bad distributions in data/{sft,dpo}.jsonl. See
     TestVocabSimplicityCalibration for the regression targets."""
+
     name = "vocab"
 
-    def __init__(self, top_n: int = _DEFAULT_TOP_N, allowed_uncommon: int = 1, severity: float = 0.5):
+    def __init__(
+        self, top_n: int = _DEFAULT_TOP_N, allowed_uncommon: int = 1, severity: float = 0.5
+    ):
         self.common_words = _common_words(top_n)
         self.allowed_uncommon = allowed_uncommon
         self.severity = severity  # how much each excess uncommon word costs
@@ -172,9 +182,10 @@ Respond with ONLY a JSON object, no prose, no markdown fences:
 class SemanticPreservationReward(RewardComponent):
     """Asks a judge whether the simplification preserves source meaning
     without hallucinating. Average of the two scores, normalized to [0, 1]."""
+
     name = "meaning"
 
-    def compute(self, output: str, ctx: RewardContext, judge: Optional[BaseJudge] = None) -> float:
+    def compute(self, output: str, ctx: RewardContext, judge: BaseJudge | None = None) -> float:
         if judge is None:
             return 0.5  # no judge → unknown; mid score so we don't crash GRPO
         prompt = _MEANING_PROMPT_TEMPLATE.format(source=ctx.source, output=output)
@@ -195,9 +206,11 @@ class SemanticPreservationReward(RewardComponent):
 
 # ---------- Stubs (TODO) ----------
 
+
 class RepetitionReward(RewardComponent):
     """TODO: penalize repetitive outputs (low unique-words/total ratio).
     Stubbed at 1.0 for v1 — included so the wiring works when we activate it."""
+
     name = "repetition"
 
     def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
@@ -208,6 +221,7 @@ class SmoothDifficultyReward(RewardComponent):
     """TODO: judge-based CEFR level → smooth score (A2=1.0, A1=0.6, B1=0.4, ...).
     Stubbed at 1.0 for v1. Will reuse few-shot samples like
     verifier.DifficultyRankingTest does."""
+
     name = "difficulty"
 
     def __init__(self, a1_samples=None, a2_samples=None, b1_samples=None):
@@ -221,12 +235,14 @@ class SmoothDifficultyReward(RewardComponent):
 
 # ---------- CombinedReward ----------
 
+
 class CombinedReward(RewardComponent):
     """Weighted sum of components. If a 'meaning' component is present and
     scores below `meaning_gate`, the whole reward is zeroed.
 
     The meaning gate is the safety belt against the model gaming the
     cheaper rewards (length, vocab) by silently dropping content."""
+
     name = "combined"
 
     def __init__(
@@ -272,14 +288,15 @@ _OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-latest"
 def _get_judge():
     """Lazy-load a judge from env. Backend selection:
 
-      * MEANING_JUDGE_BACKEND=openrouter → OpenRouter (needs OPENROUTER_API_KEY).
-        Defaults: model=anthropic/claude-haiku-latest, url=https://openrouter.ai/api/v1.
-        Override via MEANING_JUDGE_MODEL / MEANING_JUDGE_URL.
-      * MEANING_JUDGE_URL set            → local LM Studio (no auth).
-      * neither                          → None; meaning_reward returns 0.5
-        (constant contribution → no signal but no crash).
+    * MEANING_JUDGE_BACKEND=openrouter → OpenRouter (needs OPENROUTER_API_KEY).
+      Defaults: model=anthropic/claude-haiku-latest, url=https://openrouter.ai/api/v1.
+      Override via MEANING_JUDGE_MODEL / MEANING_JUDGE_URL.
+    * MEANING_JUDGE_URL set            → local LM Studio (no auth).
+    * neither                          → None; meaning_reward returns 0.5
+      (constant contribution → no signal but no crash).
     """
     import os
+
     if hasattr(_get_judge, "_cached"):
         return _get_judge._cached
 
@@ -289,9 +306,7 @@ def _get_judge():
     if backend == "openrouter":
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "MEANING_JUDGE_BACKEND=openrouter but OPENROUTER_API_KEY is not set"
-            )
+            raise RuntimeError("MEANING_JUDGE_BACKEND=openrouter but OPENROUTER_API_KEY is not set")
         url = os.environ.get("MEANING_JUDGE_URL", _OPENROUTER_DEFAULT_URL)
         model = os.environ.get("MEANING_JUDGE_MODEL", _OPENROUTER_DEFAULT_MODEL)
         _get_judge._cached = LocalJudge(base_url=url, model_name=model, api_key=api_key)
@@ -311,7 +326,9 @@ except ImportError:
     # Tests don't need mlx_lm_lora — fall back to a no-op decorator so
     # this module is still importable.
     def register_reward_function(name=None):
-        def deco(fn): return fn
+        def deco(fn):
+            return fn
+
         return deco
 
 
@@ -319,7 +336,7 @@ except ImportError:
 def length_reward(prompts, completions, answer, types=None) -> list[float]:
     return [
         _LENGTH.compute(c, RewardContext(source=p, answer=a))
-        for p, c, a in zip(prompts, completions, answer)
+        for p, c, a in zip(prompts, completions, answer, strict=True)
     ]
 
 
@@ -327,7 +344,7 @@ def length_reward(prompts, completions, answer, types=None) -> list[float]:
 def vocab_reward(prompts, completions, answer, types=None) -> list[float]:
     return [
         _VOCAB.compute(c, RewardContext(source=p, answer=a))
-        for p, c, a in zip(prompts, completions, answer)
+        for p, c, a in zip(prompts, completions, answer, strict=True)
     ]
 
 
@@ -336,7 +353,7 @@ def meaning_reward(prompts, completions, answer, types=None) -> list[float]:
     judge = _get_judge()
     return [
         _MEANING.compute(c, RewardContext(source=p, answer=a), judge=judge)
-        for p, c, a in zip(prompts, completions, answer)
+        for p, c, a in zip(prompts, completions, answer, strict=True)
     ]
 
 
@@ -345,6 +362,7 @@ def meaning_reward(prompts, completions, answer, types=None) -> list[float]:
 # Used to verify rewards make sense before training, and to monitor reward
 # variance per group during/after training. Reward variance ≈ 0 inside a
 # GRPO group means the advantage signal is dead.
+
 
 def _default_combined() -> CombinedReward:
     return CombinedReward(
@@ -357,7 +375,7 @@ def _default_combined() -> CombinedReward:
     )
 
 
-def audit_record(source: str, output: str, judge: Optional[BaseJudge] = None) -> dict[str, float]:
+def audit_record(source: str, output: str, judge: BaseJudge | None = None) -> dict[str, float]:
     """Per-component scores for one (source, output) pair, plus combined."""
     ctx = RewardContext(source=source)
     out = {
@@ -372,7 +390,7 @@ def audit_record(source: str, output: str, judge: Optional[BaseJudge] = None) ->
 def compute_variety(
     prompts: list[str],
     rollouts_per_prompt: list[list[str]],
-    judge: Optional[BaseJudge] = None,
+    judge: BaseJudge | None = None,
 ) -> dict:
     """For each prompt, score its rollouts and report mean/std.
 
@@ -381,14 +399,12 @@ def compute_variety(
     whether our rewards are *discriminating* between rollouts.
     """
     import statistics
+
     combined = _default_combined()
     per_prompt: list[dict] = []
     stds: list[float] = []
-    for p, rollouts in zip(prompts, rollouts_per_prompt):
-        scores = [
-            combined.compute(r, RewardContext(source=p), judge=judge)
-            for r in rollouts
-        ]
+    for p, rollouts in zip(prompts, rollouts_per_prompt, strict=True):
+        scores = [combined.compute(r, RewardContext(source=p), judge=judge) for r in rollouts]
         mean_s = statistics.mean(scores) if scores else 0.0
         std_s = statistics.pstdev(scores) if len(scores) > 1 else 0.0
         per_prompt.append({"mean": mean_s, "std": std_s, "rewards": scores})
@@ -403,6 +419,7 @@ def compute_variety(
 
 # ---------- CLI ----------
 
+
 def _variety_cli(args) -> None:
     """Sample G rollouts per prompt from a real adapter; report reward
     std per group. GRPO advantage = (reward - mean) / std within a group;
@@ -413,6 +430,7 @@ def _variety_cli(args) -> None:
     judge = None
     if args.with_judge:
         from verifier import LocalJudge
+
         judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
 
     # Load prompts. Accept either GRPO-shape (`prompt`) or SFT-shape (`complex`).
@@ -426,7 +444,10 @@ def _variety_cli(args) -> None:
             prompts.append(r.get("prompt") or r.get("complex"))
             if len(prompts) >= args.n_prompts:
                 break
-    print(f"[variety] {len(prompts)} prompts × {args.group_size} rollouts at temp={args.temperature}", flush=True)
+    print(
+        f"[variety] {len(prompts)} prompts × {args.group_size} rollouts at temp={args.temperature}",
+        flush=True,
+    )
 
     adapter_path = None if args.adapter == "base" else args.adapter
     model, tokenizer = load_model_with_adapter(args.model, adapter_path)
@@ -438,7 +459,10 @@ def _variety_cli(args) -> None:
         for j in range(args.group_size):
             out = gen(p)
             rollouts.append(out)
-            print(f"  [{i+1}/{len(prompts)}, rollout {j+1}/{args.group_size}] {len(out.split())}w", flush=True)
+            print(
+                f"  [{i + 1}/{len(prompts)}, rollout {j + 1}/{args.group_size}] {len(out.split())}w",
+                flush=True,
+            )
         rollouts_per_prompt.append(rollouts)
 
     stats = compute_variety(prompts, rollouts_per_prompt, judge=judge)
@@ -448,15 +472,21 @@ def _variety_cli(args) -> None:
     print(f"  max  across-group std : {stats['max_std']:.4f}")
     if stats["mean_std"] < 0.05:
         print("  ⚠️  mean std < 0.05 — GRPO advantage signal will be weak!")
-    print(f"\n=== PER-PROMPT BREAKDOWN ===")
-    for i, (p, prompt_text, rollouts) in enumerate(zip(stats["per_prompt"], prompts, rollouts_per_prompt)):
-        print(f"\n[{i+1}] mean={p['mean']:.3f} std={p['std']:.4f}  rewards={[round(r, 3) for r in p['rewards']]}")
+    print("\n=== PER-PROMPT BREAKDOWN ===")
+    for i, (p, prompt_text, rollouts) in enumerate(
+        zip(stats["per_prompt"], prompts, rollouts_per_prompt, strict=True)
+    ):
+        print(
+            f"\n[{i + 1}] mean={p['mean']:.3f} std={p['std']:.4f}  rewards={[round(r, 3) for r in p['rewards']]}"
+        )
         if args.show_rollouts:
             print(f"    SOURCE ({len(prompt_text.split())}w): {prompt_text[:140]}…")
-            for j, (r, score) in enumerate(zip(rollouts, p['rewards'])):
+            for j, (r, score) in enumerate(zip(rollouts, p["rewards"], strict=True)):
                 # Per-component scores for this rollout
                 comp = audit_record(prompt_text, r, judge=judge)
-                print(f"    [rollout {j+1} | combined={score:.3f} L={comp['length']:.2f} V={comp['vocab']:.2f} M={comp['meaning']:.2f}] {len(r.split())}w")
+                print(
+                    f"    [rollout {j + 1} | combined={score:.3f} L={comp['length']:.2f} V={comp['vocab']:.2f} M={comp['meaning']:.2f}] {len(r.split())}w"
+                )
                 print(f"      {r[:200]}…" if len(r) > 200 else f"      {r}")
 
 
@@ -465,6 +495,7 @@ def _audit_cli(args) -> None:
     judge = None
     if args.with_judge:
         from verifier import LocalJudge
+
         judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
 
     records: list[dict] = []
@@ -498,11 +529,14 @@ def _audit_cli(args) -> None:
         worst = sorted(rows, key=lambda r: r["combined"])[: args.show_worst]
         print(f"\n=== {args.show_worst} WORST records by combined score ===")
         for r in worst:
-            print(f"  {r['combined']:.3f}  L={r['length']:.2f} V={r['vocab']:.2f} M={r['meaning']:.2f}  {r['title']}")
+            print(
+                f"  {r['combined']:.3f}  L={r['length']:.2f} V={r['vocab']:.2f} M={r['meaning']:.2f}  {r['title']}"
+            )
 
 
 def main() -> None:
     import argparse
+
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -511,12 +545,17 @@ def main() -> None:
     audit.add_argument("--with-judge", action="store_true")
     audit.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1")
     audit.add_argument("--judge-model", default="google/gemma-4-26b-a4b")
-    audit.add_argument("--output-field", default="simple",
-                       help="JSON field that holds the model output (simple|output|...)")
+    audit.add_argument(
+        "--output-field",
+        default="simple",
+        help="JSON field that holds the model output (simple|output|...)",
+    )
     audit.add_argument("--limit", type=int, default=0)
     audit.add_argument("--show-worst", type=int, default=5)
 
-    variety = sub.add_parser("variety", help="sample rollouts from an adapter and report reward std per group")
+    variety = sub.add_parser(
+        "variety", help="sample rollouts from an adapter and report reward std per group"
+    )
     variety.add_argument("--adapter", required=True, help="adapter dir or 'base' for no adapter")
     variety.add_argument("--prompts-path", default="data/grpo/train.jsonl")
     variety.add_argument("--n-prompts", type=int, default=5)
@@ -525,8 +564,11 @@ def main() -> None:
     variety.add_argument("--max-tokens", type=int, default=512)
     variety.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     variety.add_argument("--with-judge", action="store_true")
-    variety.add_argument("--show-rollouts", action="store_true",
-                         help="print each rollout's text and per-component scores")
+    variety.add_argument(
+        "--show-rollouts",
+        action="store_true",
+        help="print each rollout's text and per-component scores",
+    )
     variety.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1")
     variety.add_argument("--judge-model", default="google/gemma-4-26b-a4b")
 

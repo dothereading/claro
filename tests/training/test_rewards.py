@@ -5,17 +5,21 @@ The judge-based meaning reward uses a stub. Stubs (repetition, difficulty)
 are required to exist and return floats so the wiring works, but assert
 nothing about their numeric value yet.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from langsimp.verifier import BaseJudge
 
-rewards = pytest.importorskip("langsimp.training.rewards", reason="rewards.py not implemented yet (RED)")
+rewards = pytest.importorskip(
+    "langsimp.training.rewards", reason="rewards.py not implemented yet (RED)"
+)
 
 
 class StubJudge(BaseJudge):
     """Returns whatever evaluate_response was passed at construction time."""
+
     def __init__(self, response: dict):
         self.response = response
         self.calls: list[str] = []
@@ -26,6 +30,7 @@ class StubJudge(BaseJudge):
 
 
 # ---------- LengthVsSourceReward ----------
+
 
 class TestLengthVsSourceReward:
     def setup_method(self):
@@ -71,6 +76,7 @@ class TestLengthVsSourceReward:
 
 
 # ---------- VocabSimplicityReward ----------
+
 
 class TestVocabSimplicityReward:
     def setup_method(self):
@@ -174,6 +180,7 @@ class TestVocabSimplicityCalibration:
 
 # ---------- SemanticPreservationReward ----------
 
+
 class TestSemanticPreservationReward:
     def _ctx(self, source: str):
         return rewards.RewardContext(source=source)
@@ -218,6 +225,7 @@ class TestSemanticPreservationReward:
 
 # ---------- Stubs (must exist; numeric behavior is TBD) ----------
 
+
 class TestRepetitionRewardStub:
     def test_class_exists_and_returns_float(self):
         r = rewards.RepetitionReward()
@@ -237,59 +245,87 @@ class TestSmoothDifficultyRewardStub:
 
 # ---------- CombinedReward ----------
 
+
 class TestCombinedReward:
     def test_weighted_sum(self):
         # Two fixed-score components with weights 0.6, 0.4
         class Fixed(rewards.RewardComponent):
             name = "fixed"
-            def __init__(self, val): self.val = val
-            def compute(self, output, ctx, judge=None): return self.val
 
-        c = rewards.CombinedReward([
-            (0.6, Fixed(1.0)),
-            (0.4, Fixed(0.0)),
-        ])
+            def __init__(self, val):
+                self.val = val
+
+            def compute(self, output, ctx, judge=None):
+                return self.val
+
+        c = rewards.CombinedReward(
+            [
+                (0.6, Fixed(1.0)),
+                (0.4, Fixed(0.0)),
+            ]
+        )
         assert c.compute("x", rewards.RewardContext(source="s")) == pytest.approx(0.6)
 
     def test_meaning_gate_zeros_when_meaning_low(self):
         # If a component named 'meaning' scores below the gate threshold,
         # the combined reward must be 0.0 regardless of other components.
         class Fixed(rewards.RewardComponent):
-            def __init__(self, name, val): self.name = name; self.val = val
-            def compute(self, output, ctx, judge=None): return self.val
+            def __init__(self, name, val):
+                self.name = name
+                self.val = val
 
-        c = rewards.CombinedReward([
-            (0.5, Fixed("meaning", 0.4)),  # below default 0.5 gate
-            (0.5, Fixed("length", 1.0)),
-        ], meaning_gate=0.5)
+            def compute(self, output, ctx, judge=None):
+                return self.val
+
+        c = rewards.CombinedReward(
+            [
+                (0.5, Fixed("meaning", 0.4)),  # below default 0.5 gate
+                (0.5, Fixed("length", 1.0)),
+            ],
+            meaning_gate=0.5,
+        )
         assert c.compute("x", rewards.RewardContext(source="s")) == pytest.approx(0.0)
 
     def test_meaning_gate_passes_when_meaning_ok(self):
         class Fixed(rewards.RewardComponent):
-            def __init__(self, name, val): self.name = name; self.val = val
-            def compute(self, output, ctx, judge=None): return self.val
+            def __init__(self, name, val):
+                self.name = name
+                self.val = val
 
-        c = rewards.CombinedReward([
-            (0.5, Fixed("meaning", 0.6)),
-            (0.5, Fixed("length", 1.0)),
-        ], meaning_gate=0.5)
+            def compute(self, output, ctx, judge=None):
+                return self.val
+
+        c = rewards.CombinedReward(
+            [
+                (0.5, Fixed("meaning", 0.6)),
+                (0.5, Fixed("length", 1.0)),
+            ],
+            meaning_gate=0.5,
+        )
         # 0.5*0.6 + 0.5*1.0 = 0.8
         assert c.compute("x", rewards.RewardContext(source="s")) == pytest.approx(0.8)
 
     def test_combined_returns_value_in_unit_interval(self):
         class Fixed(rewards.RewardComponent):
             name = "fixed"
-            def __init__(self, val): self.val = val
-            def compute(self, output, ctx, judge=None): return self.val
 
-        c = rewards.CombinedReward([
-            (0.5, Fixed(1.0)),
-            (0.5, Fixed(1.0)),
-        ])
+            def __init__(self, val):
+                self.val = val
+
+            def compute(self, output, ctx, judge=None):
+                return self.val
+
+        c = rewards.CombinedReward(
+            [
+                (0.5, Fixed(1.0)),
+                (0.5, Fixed(1.0)),
+            ]
+        )
         assert c.compute("x", rewards.RewardContext(source="s")) == pytest.approx(1.0)
 
 
 # ---------- audit + variety helpers (used by the CLI) ----------
+
 
 class TestAuditRecord:
     def test_returns_per_component_scores(self):
@@ -354,9 +390,9 @@ class TestRewardFunctionKwargs:
 
 class TestGetJudgeFactory:
     """`rewards._get_judge` picks a backend from env vars:
-      * MEANING_JUDGE_BACKEND=openrouter  → OpenRouter (requires OPENROUTER_API_KEY)
-      * MEANING_JUDGE_URL set             → local LM Studio (back-compat path)
-      * neither                           → None (meaning reward returns 0.5)
+    * MEANING_JUDGE_BACKEND=openrouter  → OpenRouter (requires OPENROUTER_API_KEY)
+    * MEANING_JUDGE_URL set             → local LM Studio (back-compat path)
+    * neither                           → None (meaning reward returns 0.5)
     """
 
     def setup_method(self):
@@ -402,9 +438,9 @@ class TestRewardVariety:
         # Fake "rollouts": 3 prompts × 4 completions per prompt
         prompts = ["src1", "src2", "src3"]
         rollouts_per_prompt = [
-            ["a a a", "b b b b b b b b", "c c c c", "d d d d d"],   # prompt 0
+            ["a a a", "b b b b b b b b", "c c c c", "d d d d d"],  # prompt 0
             ["e e e e e e", "f f", "g g g g g g g g g g", "h h h"],  # prompt 1
-            ["i i i", "j j j", "k k k", "l l l"],                   # prompt 2 — uniform-ish
+            ["i i i", "j j j", "k k k", "l l l"],  # prompt 2 — uniform-ish
         ]
         stats = rewards.compute_variety(prompts, rollouts_per_prompt, judge=None)
         assert len(stats["per_prompt"]) == 3

@@ -13,6 +13,7 @@ Offline-safe: if WANDB_API_KEY is missing or WANDB_MODE=disabled, training
 runs without W&B and prints a one-line note. Training never breaks because
 of an observability problem.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,8 +24,8 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
@@ -34,7 +35,8 @@ load_dotenv(REPO_ROOT / ".env")
 
 # ---------- adapter versioning helpers ----------
 
-def git_short_sha() -> Optional[str]:
+
+def git_short_sha() -> str | None:
     """Short git SHA for the current HEAD, or None if not in a repo."""
     try:
         out = subprocess.check_output(
@@ -64,7 +66,7 @@ def make_adapter_dir(
     base_dir: Path,
     stage: str,
     timestamp: str,
-    git_sha: Optional[str],
+    git_sha: str | None,
 ) -> Path:
     """Create and return adapters/<stage>/<timestamp>-<sha>/."""
     sha_part = git_sha or "nosha"
@@ -89,9 +91,8 @@ def update_latest_symlink(link_path: Path, target: Path) -> None:
 
 def write_meta(adapter_dir: Path, meta: dict) -> None:
     """Persist meta.json next to the adapter weights."""
-    (Path(adapter_dir) / "meta.json").write_text(
-        json.dumps(meta, indent=2, default=str) + "\n"
-    )
+    (Path(adapter_dir) / "meta.json").write_text(json.dumps(meta, indent=2, default=str) + "\n")
+
 
 # ---------- log parsers ----------
 #
@@ -124,7 +125,7 @@ DPO_VAL_RE = re.compile(
 )
 
 
-def parse_sft_line(line: str) -> Optional[dict]:
+def parse_sft_line(line: str) -> dict | None:
     m = SFT_TRAIN_RE.search(line)
     if m:
         return {
@@ -166,9 +167,9 @@ class GrpoLogParser:
     )
 
     def __init__(self):
-        self.current_iter: Optional[int] = None
+        self.current_iter: int | None = None
 
-    def __call__(self, line: str) -> Optional[dict]:
+    def __call__(self, line: str) -> dict | None:
         s = line.strip()
         # Val line is self-contained — match before the bare-iter header.
         m = self._VAL_RE.match(s)
@@ -228,7 +229,7 @@ class GrpoLogParser:
         return None
 
 
-def parse_dpo_line(line: str) -> Optional[dict]:
+def parse_dpo_line(line: str) -> dict | None:
     m = DPO_TRAIN_RE.search(line)
     if m:
         return {
@@ -258,6 +259,7 @@ def parse_dpo_line(line: str) -> Optional[dict]:
 
 # ---------- run name ----------
 
+
 def _short_model(model: str) -> str:
     """`mlx-community/gemma-3-1b-it-bf16` → `gemma-3-1b`."""
     leaf = model.rsplit("/", 1)[-1]
@@ -285,6 +287,7 @@ def build_run_name(stage: str, model: str, config: dict) -> str:
 
 # ---------- W&B integration ----------
 
+
 def _wandb_or_none(project: str, run_name: str, config: dict, tags: list[str]):
     """Return an initialized wandb run, or None if W&B is unavailable.
 
@@ -301,6 +304,7 @@ def _wandb_or_none(project: str, run_name: str, config: dict, tags: list[str]):
         return None
     try:
         import wandb
+
         return wandb.init(project=project, name=run_name, config=config, tags=tags)
     except Exception as e:
         print(f"[train] wandb.init failed ({e}) — running without W&B", flush=True)
@@ -309,7 +313,7 @@ def _wandb_or_none(project: str, run_name: str, config: dict, tags: list[str]):
 
 def run_with_logging(
     cmd: list[str],
-    parser: Callable[[str], Optional[dict]],
+    parser: Callable[[str], dict | None],
     project: str,
     run_name: str,
     config: dict,
@@ -328,8 +332,11 @@ def run_with_logging(
 
     print(f"[train] launching: {' '.join(cmd)}", flush=True)
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
     try:
         assert proc.stdout is not None
@@ -360,7 +367,8 @@ def run_with_logging(
 
 # ---------- subcommands ----------
 
-def _resolve_adapter_dir(args: argparse.Namespace, stage: str) -> tuple[Path, str, Optional[str]]:
+
+def _resolve_adapter_dir(args: argparse.Namespace, stage: str) -> tuple[Path, str, str | None]:
     """Compute the versioned adapter dir, plus the timestamp/sha used.
 
     If --adapter-path is set explicitly, honor it (no versioning) — useful
@@ -376,10 +384,15 @@ def _resolve_adapter_dir(args: argparse.Namespace, stage: str) -> tuple[Path, st
     return adapter_dir, timestamp, sha
 
 
-def _finalize(stage: str, adapter_dir: Path, run_result: dict, config: dict, cmd: list[str], timestamp: str) -> None:
+def _finalize(
+    stage: str, adapter_dir: Path, run_result: dict, config: dict, cmd: list[str], timestamp: str
+) -> None:
     """Write meta.json and update the `latest` symlink. No-op on bad runs."""
     if run_result["exit_code"] != 0:
-        print(f"[train] non-zero exit ({run_result['exit_code']}); skipping meta + symlink update", flush=True)
+        print(
+            f"[train] non-zero exit ({run_result['exit_code']}); skipping meta + symlink update",
+            flush=True,
+        )
         return
     meta = {
         "timestamp": timestamp,
@@ -405,31 +418,54 @@ def _finalize(stage: str, adapter_dir: Path, run_result: dict, config: dict, cmd
 def _sft(args: argparse.Namespace) -> int:
     adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "sft")
     cmd = [
-        "uv", "run", "python", "-m", "mlx_lm", "lora",
-        "--model", args.model,
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "mlx_lm",
+        "lora",
+        "--model",
+        args.model,
         "--train",
-        "--data", args.data,
-        "--adapter-path", str(adapter_dir),
-        "--batch-size", str(args.batch_size),
-        "--num-layers", str(args.lora_layers),
-        "--iters", str(args.iters),
-        "--learning-rate", str(args.lr),
-        "--val-batches", str(args.val_batches),
-        "--steps-per-eval", str(args.steps_per_eval),
-        "--steps-per-report", str(args.steps_per_report),
+        "--data",
+        args.data,
+        "--adapter-path",
+        str(adapter_dir),
+        "--batch-size",
+        str(args.batch_size),
+        "--num-layers",
+        str(args.lora_layers),
+        "--iters",
+        str(args.iters),
+        "--learning-rate",
+        str(args.lr),
+        "--val-batches",
+        str(args.val_batches),
+        "--steps-per-eval",
+        str(args.steps_per_eval),
+        "--steps-per-report",
+        str(args.steps_per_report),
         "--grad-checkpoint",
     ]
     config = {
-        "stage": "sft", "model": args.model, "data": args.data,
-        "iters": args.iters, "lr": args.lr,
-        "batch_size": args.batch_size, "lora_layers": args.lora_layers,
+        "stage": "sft",
+        "model": args.model,
+        "data": args.data,
+        "iters": args.iters,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
+        "lora_layers": args.lora_layers,
         "dataset_hash": dataset_hash(Path(args.data)),
         "adapter_dir": str(adapter_dir),
     }
     name = build_run_name("sft", args.model, config)
     result = run_with_logging(
-        cmd, parse_sft_line, project=args.project, run_name=name,
-        config=config, tags=["sft", "mlx-lm"],
+        cmd,
+        parse_sft_line,
+        project=args.project,
+        run_name=name,
+        config=config,
+        tags=["sft", "mlx-lm"],
     )
     _finalize("sft", adapter_dir, result, config, cmd, timestamp)
     return result["exit_code"]
@@ -438,38 +474,64 @@ def _sft(args: argparse.Namespace) -> int:
 def _dpo(args: argparse.Namespace) -> int:
     adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "dpo")
     cmd = [
-        "uv", "run", "python", "-m", "mlx_lm_lora.train",
-        "--model", args.model,
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "mlx_lm_lora.train",
+        "--model",
+        args.model,
         "--train",
-        "--train-mode", "dpo",
-        "--data", args.data,
-        "--adapter-path", str(adapter_dir),
-        "--batch-size", str(args.batch_size),
-        "--num-layers", str(args.lora_layers),
-        "--iters", str(args.iters),
-        "--learning-rate", str(args.lr),
-        "--beta", str(args.beta),
-        "--dpo-cpo-loss-type", "sigmoid",
-        "--val-batches", str(args.val_batches),
-        "--steps-per-eval", str(args.steps_per_eval),
-        "--steps-per-report", str(args.steps_per_report),
+        "--train-mode",
+        "dpo",
+        "--data",
+        args.data,
+        "--adapter-path",
+        str(adapter_dir),
+        "--batch-size",
+        str(args.batch_size),
+        "--num-layers",
+        str(args.lora_layers),
+        "--iters",
+        str(args.iters),
+        "--learning-rate",
+        str(args.lr),
+        "--beta",
+        str(args.beta),
+        "--dpo-cpo-loss-type",
+        "sigmoid",
+        "--val-batches",
+        str(args.val_batches),
+        "--steps-per-eval",
+        str(args.steps_per_eval),
+        "--steps-per-report",
+        str(args.steps_per_report),
         "--grad-checkpoint",
     ]
     if args.resume_adapter and Path(args.resume_adapter).exists():
         cmd.extend(["--resume-adapter-file", args.resume_adapter])
         print(f"[train] resuming from {args.resume_adapter}", flush=True)
     config = {
-        "stage": "dpo", "model": args.model, "data": args.data,
-        "iters": args.iters, "lr": args.lr, "beta": args.beta,
-        "batch_size": args.batch_size, "lora_layers": args.lora_layers,
+        "stage": "dpo",
+        "model": args.model,
+        "data": args.data,
+        "iters": args.iters,
+        "lr": args.lr,
+        "beta": args.beta,
+        "batch_size": args.batch_size,
+        "lora_layers": args.lora_layers,
         "dataset_hash": dataset_hash(Path(args.data)),
         "resume_from": args.resume_adapter,
         "adapter_dir": str(adapter_dir),
     }
     name = build_run_name("dpo", args.model, config)
     result = run_with_logging(
-        cmd, parse_dpo_line, project=args.project, run_name=name,
-        config=config, tags=["dpo", "mlx-lm-lora"],
+        cmd,
+        parse_dpo_line,
+        project=args.project,
+        run_name=name,
+        config=config,
+        tags=["dpo", "mlx-lm-lora"],
     )
     _finalize("dpo", adapter_dir, result, config, cmd, timestamp)
     return result["exit_code"]
@@ -478,35 +540,61 @@ def _dpo(args: argparse.Namespace) -> int:
 def _grpo(args: argparse.Namespace) -> int:
     adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "grpo")
     cmd = [
-        "uv", "run", "python", "-m", "mlx_lm_lora.train",
-        "--model", args.model,
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "mlx_lm_lora.train",
+        "--model",
+        args.model,
         "--train",
-        "--train-mode", "grpo",
-        "--data", args.data,
-        "--adapter-path", str(adapter_dir),
-        "--batch-size", str(args.batch_size),
-        "--num-layers", str(args.lora_layers),
-        "--iters", str(args.iters),
-        "--learning-rate", str(args.lr),
-        "--reward-functions", args.reward_functions,
-        "--reward-functions-file", args.reward_functions_file,
-        "--reward-weights", args.reward_weights,
-        "--group-size", str(args.group_size),
-        "--temperature", str(args.temperature),
-        "--max-completion-length", str(args.max_completion_length),
-        "--val-batches", str(args.val_batches),
-        "--steps-per-eval", str(args.steps_per_eval),
-        "--steps-per-report", str(args.steps_per_report),
+        "--train-mode",
+        "grpo",
+        "--data",
+        args.data,
+        "--adapter-path",
+        str(adapter_dir),
+        "--batch-size",
+        str(args.batch_size),
+        "--num-layers",
+        str(args.lora_layers),
+        "--iters",
+        str(args.iters),
+        "--learning-rate",
+        str(args.lr),
+        "--reward-functions",
+        args.reward_functions,
+        "--reward-functions-file",
+        args.reward_functions_file,
+        "--reward-weights",
+        args.reward_weights,
+        "--group-size",
+        str(args.group_size),
+        "--temperature",
+        str(args.temperature),
+        "--max-completion-length",
+        str(args.max_completion_length),
+        "--val-batches",
+        str(args.val_batches),
+        "--steps-per-eval",
+        str(args.steps_per_eval),
+        "--steps-per-report",
+        str(args.steps_per_report),
         "--grad-checkpoint",
     ]
     if args.resume_adapter and Path(args.resume_adapter).exists():
         cmd.extend(["--resume-adapter-file", args.resume_adapter])
         print(f"[train] resuming from {args.resume_adapter}", flush=True)
     config = {
-        "stage": "grpo", "model": args.model, "data": args.data,
-        "iters": args.iters, "lr": args.lr,
-        "batch_size": args.batch_size, "lora_layers": args.lora_layers,
-        "group_size": args.group_size, "temperature": args.temperature,
+        "stage": "grpo",
+        "model": args.model,
+        "data": args.data,
+        "iters": args.iters,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
+        "lora_layers": args.lora_layers,
+        "group_size": args.group_size,
+        "temperature": args.temperature,
         "max_completion_length": args.max_completion_length,
         "reward_functions": args.reward_functions,
         "reward_weights": args.reward_weights,
@@ -516,8 +604,12 @@ def _grpo(args: argparse.Namespace) -> int:
     }
     name = build_run_name("grpo", args.model, config)
     result = run_with_logging(
-        cmd, GrpoLogParser(), project=args.project, run_name=name,
-        config=config, tags=["grpo", "mlx-lm-lora"],
+        cmd,
+        GrpoLogParser(),
+        project=args.project,
+        run_name=name,
+        config=config,
+        tags=["grpo", "mlx-lm-lora"],
     )
     _finalize("grpo", adapter_dir, result, config, cmd, timestamp)
     return result["exit_code"]
@@ -530,8 +622,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sft = sub.add_parser("sft", help="LoRA SFT via mlx-lm with W&B logging")
     sft.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     sft.add_argument("--data", default="data/mlx")
-    sft.add_argument("--adapter-path", default=None,
-                     help="explicit adapter dir; default = adapters/sft/<timestamp>-<sha>/ + latest symlink")
+    sft.add_argument(
+        "--adapter-path",
+        default=None,
+        help="explicit adapter dir; default = adapters/sft/<timestamp>-<sha>/ + latest symlink",
+    )
     sft.add_argument("--iters", type=int, default=300)
     sft.add_argument("--batch-size", type=int, default=1)
     sft.add_argument("--lr", type=float, default=1e-4)
@@ -544,10 +639,16 @@ def _build_parser() -> argparse.ArgumentParser:
     dpo = sub.add_parser("dpo", help="LoRA DPO via mlx-lm-lora with W&B logging")
     dpo.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     dpo.add_argument("--data", default="data/dpo_mlx")
-    dpo.add_argument("--adapter-path", default=None,
-                     help="explicit adapter dir; default = adapters/dpo/<timestamp>-<sha>/ + latest symlink")
-    dpo.add_argument("--resume-adapter", default="adapters/sft/latest/adapters.safetensors",
-                     help="resume from this adapter file (silently ignored if missing)")
+    dpo.add_argument(
+        "--adapter-path",
+        default=None,
+        help="explicit adapter dir; default = adapters/dpo/<timestamp>-<sha>/ + latest symlink",
+    )
+    dpo.add_argument(
+        "--resume-adapter",
+        default="adapters/sft/latest/adapters.safetensors",
+        help="resume from this adapter file (silently ignored if missing)",
+    )
     dpo.add_argument("--iters", type=int, default=300)
     dpo.add_argument("--batch-size", type=int, default=1)
     dpo.add_argument("--lr", type=float, default=5e-6)
@@ -561,18 +662,37 @@ def _build_parser() -> argparse.ArgumentParser:
     grpo = sub.add_parser("grpo", help="GRPO via mlx-lm-lora with W&B logging")
     grpo.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     grpo.add_argument("--data", default="data/grpo")
-    grpo.add_argument("--adapter-path", default=None,
-                      help="explicit adapter dir; default = adapters/grpo/<timestamp>-<sha>/ + latest symlink")
-    grpo.add_argument("--resume-adapter", default="adapters/dpo/latest/adapters.safetensors",
-                      help="resume from this adapter file (silently ignored if missing)")
+    grpo.add_argument(
+        "--adapter-path",
+        default=None,
+        help="explicit adapter dir; default = adapters/grpo/<timestamp>-<sha>/ + latest symlink",
+    )
+    grpo.add_argument(
+        "--resume-adapter",
+        default="adapters/dpo/latest/adapters.safetensors",
+        help="resume from this adapter file (silently ignored if missing)",
+    )
     grpo.add_argument("--reward-functions", default="length_reward,vocab_reward,meaning_reward")
-    grpo.add_argument("--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py"))
-    grpo.add_argument("--reward-weights", default="[0.25,0.25,0.50]",
-                      help="JSON list, must match the order/length of --reward-functions")
-    grpo.add_argument("--group-size", type=int, default=2,
-                      help="rollouts per prompt; G=2 cheaper than G=4, sufficient for many problems")
-    grpo.add_argument("--temperature", type=float, default=0.8,
-                      help="rollout sampling temperature; higher = more reward variety per group")
+    grpo.add_argument(
+        "--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py")
+    )
+    grpo.add_argument(
+        "--reward-weights",
+        default="[0.25,0.25,0.50]",
+        help="JSON list, must match the order/length of --reward-functions",
+    )
+    grpo.add_argument(
+        "--group-size",
+        type=int,
+        default=2,
+        help="rollouts per prompt; G=2 cheaper than G=4, sufficient for many problems",
+    )
+    grpo.add_argument(
+        "--temperature",
+        type=float,
+        default=0.8,
+        help="rollout sampling temperature; higher = more reward variety per group",
+    )
     grpo.add_argument("--max-completion-length", type=int, default=512)
     grpo.add_argument("--iters", type=int, default=200)
     grpo.add_argument("--batch-size", type=int, default=1)

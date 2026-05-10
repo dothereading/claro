@@ -3,13 +3,16 @@
 The model and judge are mocked; we exercise the orchestration logic
 (prompt building, per-record evaluation, aggregate summarization).
 """
+
 from __future__ import annotations
 
 import json
 
 import pytest
 
-eval_mod = pytest.importorskip("langsimp.inference.eval_harness", reason="eval_harness.py not implemented yet (RED)")
+eval_mod = pytest.importorskip(
+    "langsimp.inference.eval_harness", reason="eval_harness.py not implemented yet (RED)"
+)
 
 
 class TestEvaluateEvalSet:
@@ -39,7 +42,10 @@ class TestEvaluateEvalSet:
         # If classify raises (judge unavailable), record level as "NA" rather than crash
         records = [{"complex": "src"}]
         gen = lambda x: "out"
-        def cls(x): raise RuntimeError("judge down")
+
+        def cls(x):
+            raise RuntimeError("judge down")
+
         results = eval_mod.evaluate_eval_set(records, gen, cls)
         assert results[0]["level"] == "NA"
 
@@ -138,6 +144,7 @@ class TestBuildEvalPrompt:
         class FakeTokenizer:
             def apply_chat_template(self, messages, tokenize, add_generation_prompt):
                 return json.dumps(messages)
+
         prompt = eval_mod.build_eval_prompt("complex paragraph", FakeTokenizer())
         msgs = json.loads(prompt)
         roles = [m["role"] for m in msgs]
@@ -146,11 +153,13 @@ class TestBuildEvalPrompt:
 
     def test_passes_add_generation_prompt(self):
         captured = {}
+
         class FakeTokenizer:
             def apply_chat_template(self, messages, tokenize, add_generation_prompt):
                 captured["add_generation_prompt"] = add_generation_prompt
                 captured["tokenize"] = tokenize
                 return ""
+
         eval_mod.build_eval_prompt("x", FakeTokenizer())
         # The model needs the prompt suffix that begins assistant turn.
         assert captured["add_generation_prompt"] is True

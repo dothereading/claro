@@ -11,13 +11,14 @@ Usage:
 Multi-paragraph input (file or stdin) is split on blank lines and each
 paragraph is generated separately.
 """
+
 from __future__ import annotations
 
 import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import TextIO
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,7 +38,7 @@ def _split_paragraphs(text: str) -> list[str]:
     return out
 
 
-def read_input(text: Optional[str], file_path: Optional[Path], stdin: Optional[TextIO]) -> list[str]:
+def read_input(text: str | None, file_path: Path | None, stdin: TextIO | None) -> list[str]:
     """Decide where the input comes from and return a list of paragraphs.
 
     Precedence: positional `text` > `file_path` > `stdin`. Raises ValueError
@@ -62,7 +63,7 @@ def format_output(sources: list[str], outputs: list[str], show_source: bool) -> 
     """
     lines: list[str] = []
     multi = len(outputs) > 1
-    for i, (src, out) in enumerate(zip(sources, outputs), 1):
+    for i, (src, out) in enumerate(zip(sources, outputs, strict=True), 1):
         if multi:
             lines.append(f"\n--- paragraph {i} ---")
         if show_source:
@@ -78,12 +79,14 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("text", nargs="?", default=None, help="text to simplify (positional)")
     p.add_argument("--file", default=None, help="read paragraphs from this file")
-    p.add_argument("--adapter", required=True,
-                   help="path to adapter dir, or 'base' for no adapter")
+    p.add_argument("--adapter", required=True, help="path to adapter dir, or 'base' for no adapter")
     p.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
     p.add_argument("--max-tokens", type=int, default=512)
-    p.add_argument("--show-source", action="store_true",
-                   help="print the source paragraph alongside each output")
+    p.add_argument(
+        "--show-source",
+        action="store_true",
+        help="print the source paragraph alongside each output",
+    )
     args = p.parse_args()
 
     # Avoid hanging on a TTY: only pull from stdin when something's piped in.
@@ -92,6 +95,7 @@ def main() -> int:
 
     # Late import so --help works even if mlx-lm has issues.
     from langsimp.inference.engine import load_model_with_adapter, make_generate_fn
+
     adapter_path = None if args.adapter == "base" else args.adapter
     model, tokenizer = load_model_with_adapter(args.model, adapter_path)
     gen = make_generate_fn(model, tokenizer, max_tokens=args.max_tokens)

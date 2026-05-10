@@ -3,12 +3,16 @@
 Model loading and generation are integration-only; the testable surface is
 input parsing (text arg / --file / stdin) and paragraph splitting.
 """
+
 from __future__ import annotations
 
 import io
+
 import pytest
 
-generate = pytest.importorskip("langsimp.inference.generate", reason="generate.py not implemented yet (RED)")
+generate = pytest.importorskip(
+    "langsimp.inference.generate", reason="generate.py not implemented yet (RED)"
+)
 
 
 class TestReadInput:
@@ -60,7 +64,9 @@ class TestFormatOutput:
 
     def test_multi_paragraph_separates_with_dividers(self):
         out = generate.format_output(
-            ["First.", "Second."], ["Simple 1.", "Simple 2."], show_source=False,
+            ["First.", "Second."],
+            ["Simple 1.", "Simple 2."],
+            show_source=False,
         )
         assert "Simple 1." in out
         assert "Simple 2." in out
@@ -69,7 +75,9 @@ class TestFormatOutput:
 
     def test_show_source_includes_input_text(self):
         out = generate.format_output(
-            ["The original."], ["The simple."], show_source=True,
+            ["The original."],
+            ["The simple."],
+            show_source=True,
         )
         assert "The original." in out
         assert "The simple." in out

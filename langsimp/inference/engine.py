@@ -2,12 +2,12 @@
 langsimp.inference.generate. Keeps a single canonical code path for "load Gemma + LoRA,
 apply the SFT chat template, generate, and clean the output."
 """
+
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from langsimp.prompts import SFT_SYSTEM_PROMPT
-
 
 # Chat-template stop markers that mlx-lm doesn't always honor on its own.
 # Without trimming, Gemma in particular produces hundreds of trailing
@@ -36,11 +36,13 @@ def build_prompt(complex_text: str, tokenizer) -> str:
         {"role": "user", "content": complex_text},
     ]
     return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True,
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
     )
 
 
-def load_model_with_adapter(model_id: str, adapter_path: Optional[str]):
+def load_model_with_adapter(model_id: str, adapter_path: str | None):
     """mlx-lm load wrapper. `adapter_path=None` loads the base model."""
     from mlx_lm import load
 
@@ -54,7 +56,9 @@ def load_model_with_adapter(model_id: str, adapter_path: Optional[str]):
     return load(model_id)
 
 
-def make_generate_fn(model, tokenizer, max_tokens: int = 512, temp: float = 0.0) -> Callable[[str], str]:
+def make_generate_fn(
+    model, tokenizer, max_tokens: int = 512, temp: float = 0.0
+) -> Callable[[str], str]:
     """Closure that takes one complex paragraph and returns the cleaned
     simplification using the SFT chat template.
 
@@ -63,13 +67,18 @@ def make_generate_fn(model, tokenizer, max_tokens: int = 512, temp: float = 0.0)
     """
     from mlx_lm import generate
     from mlx_lm.sample_utils import make_sampler
+
     sampler = make_sampler(temp=temp)
 
     def gen(complex_text: str) -> str:
         prompt = build_prompt(complex_text, tokenizer)
         raw = generate(
-            model, tokenizer, prompt=prompt,
-            max_tokens=max_tokens, verbose=False, sampler=sampler,
+            model,
+            tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            verbose=False,
+            sampler=sampler,
         )
         return clean_generation(raw)
 

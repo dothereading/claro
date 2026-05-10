@@ -1,11 +1,13 @@
 import json
 import re
-import requests
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import List, Dict, Any, Optional
+from typing import Any
+
+import requests
 
 # --- Sentence-level helpers ---
+
 
 def split_sentences(text: str) -> list[str]:
     """Split on sentence-ending punctuation followed by whitespace.
@@ -40,12 +42,15 @@ def length_ratio_score(
         return 0.0
     return 1.0 - (ratio - soft_cap) / (hard_cap - soft_cap)
 
+
 # --- Abstract Base Classes for Extensibility ---
+
 
 class BaseJudge(ABC):
     @abstractmethod
-    def evaluate(self, prompt: str) -> Dict[str, Any]:
+    def evaluate(self, prompt: str) -> dict[str, Any]:
         pass
+
 
 class BaseTest(ABC):
     @abstractmethod
@@ -53,25 +58,28 @@ class BaseTest(ABC):
         """Returns a reward score between 0.0 and 1.0"""
         pass
 
+
 # --- Implementations ---
+
 
 class LocalJudge(BaseJudge):
     """OpenAI-compatible chat endpoint. Works for LM Studio / vLLM / Ollama
     (no auth) and for hosted gateways like OpenRouter (pass `api_key` to
     send `Authorization: Bearer <key>`)."""
+
     def __init__(
         self,
         base_url: str,
         model_name: str,
         temperature: float = 0.2,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self.model = model_name
         self.temperature = temperature
         self.api_key = api_key
 
-    def evaluate(self, prompt: str) -> Dict[str, Any]:
+    def evaluate(self, prompt: str) -> dict[str, Any]:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -87,7 +95,7 @@ class LocalJudge(BaseJudge):
             print(f"Error communicating with judge at {self.endpoint}: {e}")
             return {"error": str(e)}
 
-    def _parse_json(self, content: str) -> Dict[str, Any]:
+    def _parse_json(self, content: str) -> dict[str, Any]:
         content = content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -117,7 +125,7 @@ def truncate_to_words(text: str, n_words: int = 100) -> str:
     return " ".join(words[:n_words])
 
 
-def windowed_excerpts(text: str, n_words: int = 100, n_windows: int = 3) -> List[str]:
+def windowed_excerpts(text: str, n_words: int = 100, n_windows: int = 3) -> list[str]:
     """Evenly-spaced n-word windows across the text. Used so that an A2-looking
     intro can't carry a text whose body is B1-complex."""
     words = _clean(text).split()
@@ -133,7 +141,7 @@ def windowed_excerpts(text: str, n_words: int = 100, n_windows: int = 3) -> List
         if s in seen:
             continue
         seen.add(s)
-        out.append(" ".join(words[s:s + n_words]))
+        out.append(" ".join(words[s : s + n_words]))
     return out
 
 
@@ -153,7 +161,7 @@ class PacingVarietyTest(BaseTest):
     def __init__(self, opening_tokens: int = 2):
         self.opening_tokens = opening_tokens
 
-    def run(self, text: str, judge: Optional[BaseJudge] = None) -> float:
+    def run(self, text: str, judge: BaseJudge | None = None) -> float:
         sentences = split_sentences(text)
         if len(sentences) < 2:
             return 1.0
@@ -176,13 +184,14 @@ class DifficultyRankingTest(BaseTest):
       - ask the judge for an explicit level label and rubric-based reasoning,
       - run the judge n_votes times and majority-vote.
     """
+
     VALID_LEVELS = {"<A1", "A1", "A2", "B1", "B2+", "NA"}
 
     def __init__(
         self,
-        a1_samples: List[str],
-        b1_samples: List[str],
-        a2_samples: Optional[List[str]] = None,
+        a1_samples: list[str],
+        b1_samples: list[str],
+        a2_samples: list[str] | None = None,
         n_words: int = 100,
     ):
         # Length-normalize the reference samples too — stops the judge from
@@ -192,16 +201,18 @@ class DifficultyRankingTest(BaseTest):
         self.a2_samples = [truncate_to_words(s, n_words) for s in (a2_samples or [])]
         self.n_words = n_words
 
-    def _judge_call(self, text: str, judge: BaseJudge) -> Dict[str, Any]:
+    def _judge_call(self, text: str, judge: BaseJudge) -> dict[str, Any]:
         excerpt = truncate_to_words(text, self.n_words)
         prompt = self._build_prompt(excerpt)
         return judge.evaluate(prompt)
 
-    def _normalize_level(self, result: Dict[str, Any]) -> str:
+    def _normalize_level(self, result: dict[str, Any]) -> str:
         raw = result.get("level") if isinstance(result, dict) else None
         level = (raw or "").strip().upper().replace("B2", "B2+") if raw else ""
-        if level in {"BELOW A1", "PRE-A1", "<<A1"}: level = "<A1"
-        if level in {"B2", "B2+", "C1", "C2", "C1+", "C2+"}: level = "B2+"
+        if level in {"BELOW A1", "PRE-A1", "<<A1"}:
+            level = "<A1"
+        if level in {"B2", "B2+", "C1", "C2", "C1+", "C2+"}:
+            level = "B2+"
         if level not in self.VALID_LEVELS:
             return "NA"
         return level
@@ -220,11 +231,11 @@ class DifficultyRankingTest(BaseTest):
         feats = result.get("complex_features", "") if isinstance(result, dict) else ""
         print(f"[judge] level={level!r} feats={str(feats)[:120]}")
         if level == "NA":
-            print(f"[warn] unrecognized level — scoring 0")
+            print("[warn] unrecognized level — scoring 0")
             return 0.0
         return 1.0 if level == "A2" else 0.0
 
-    def _format_block(self, header: str, samples: List[str]) -> str:
+    def _format_block(self, header: str, samples: list[str]) -> str:
         if not samples:
             return ""
         body = "\n\n".join(f"<sample>\n{s}\n</sample>" for s in samples)
@@ -296,10 +307,11 @@ Respond with ONLY a JSON object, no prose, no markdown fences:
 }}
 """
 
+
 class RewardVerifier:
     def __init__(self, judge: BaseJudge):
         self.judge = judge
-        self.tests: List[BaseTest] = []
+        self.tests: list[BaseTest] = []
 
     def add_test(self, test: BaseTest):
         self.tests.append(test)
@@ -310,18 +322,21 @@ class RewardVerifier:
         scores = [test.run(text, self.judge) for test in self.tests]
         return sum(scores) / len(scores)
 
+
 # --- Main Execution Script ---
 
 if __name__ == "__main__":
     SAMPLES_FILE = "samples.jsonl"
+
     def load_samples(file_path: str):
-        buckets: Dict[str, List[str]] = {"A1": [], "A2": [], "B1": []}
-        with open(file_path, 'r', encoding='utf-8') as f:
+        buckets: dict[str, list[str]] = {"A1": [], "A2": [], "B1": []}
+        with open(file_path, encoding="utf-8") as f:
             for line in f:
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
                 data = json.loads(line)
-                if data['level'] in buckets:
-                    buckets[data['level']].append(data['text'])
+                if data["level"] in buckets:
+                    buckets[data["level"]].append(data["text"])
         return buckets
 
     samples = load_samples(SAMPLES_FILE)
@@ -335,12 +350,14 @@ The Taj Mahal (pronounced /ˌtɑːdʒ mə'hɑːl/) is a famous mausoleum next to
 
     judge = LocalJudge(base_url=LM_STUDIO_URL, model_name=MODEL_NAME)
     verifier = RewardVerifier(judge)
-    verifier.add_test(DifficultyRankingTest(
-        a1_samples=samples["A1"],
-        b1_samples=samples["B1"],
-        a2_samples=samples["A2"],
-        n_words=100,
-    ))
+    verifier.add_test(
+        DifficultyRankingTest(
+            a1_samples=samples["A1"],
+            b1_samples=samples["B1"],
+            a2_samples=samples["A2"],
+            n_words=100,
+        )
+    )
 
     print(f"--- Running Verifier with {MODEL_NAME} ---")
 
@@ -350,4 +367,6 @@ The Taj Mahal (pronounced /ˌtɑːdʒ mə'hɑːl/) is a famous mausoleum next to
 
     print("\n[TESTING B1 CANDIDATE] (expect FAIL — should not be classified as A2)")
     reward_b1 = verifier.verify(candidate_b1_text)
-    print(f"Result: {'PASS' if reward_b1 == 0.0 else 'FAIL'} | Score: {reward_b1} (1.0 means wrongly classified as A2)")
+    print(
+        f"Result: {'PASS' if reward_b1 == 0.0 else 'FAIL'} | Score: {reward_b1} (1.0 means wrongly classified as A2)"
+    )

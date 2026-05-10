@@ -14,14 +14,35 @@ dependencies = [
     "mlx-lm-lora>=2.1.0",
     "wandb>=0.18",
     "wordfreq>=3.1",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "ruff>=0.5",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort, UP = pyupgrade,
+# B = bugbear (real-bug heuristics), SIM = simplify.
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+# E501 (line-too-long) handled by formatter; UP007 (Optional → X | None)
+# is noisy in code that already uses `Optional` consistently with `from
+# __future__ import annotations`.
+ignore = ["E501", "UP007"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use bare asserts, throwaway lambdas as fixtures,
+# fixtures named like B-rule violations, and one-off names — relax
+# bugbear / simplify / no-lambda-assign there.
+"tests/**/*.py" = ["B", "SIM", "E731"]

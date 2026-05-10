@@ -3,6 +3,7 @@
 The parsers are pure regex over real log lines; we test them against the
 exact formats emitted by mlx-lm and mlx-lm-lora (sampled from logs/).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -153,7 +154,12 @@ class TestParseGrpoLine:
         assert out == {"iter": 50, "valid/loss": 0.123}
 
     def test_unrelated_line_returns_none(self):
-        assert self.p("================================================================================") is None
+        assert (
+            self.p(
+                "================================================================================"
+            )
+            is None
+        )
         assert self.p("") is None
         assert self.p("Generation Stats:") is None
 
@@ -234,13 +240,19 @@ class TestUpdateLatestSymlink:
 
 class TestBuildRunName:
     def test_includes_stage_and_model(self):
-        name = train.build_run_name(stage="sft", model="mlx-community/gemma-3-1b-it-bf16",
-                                    config={"iters": 300, "lr": 1e-4, "batch_size": 1})
+        name = train.build_run_name(
+            stage="sft",
+            model="mlx-community/gemma-3-1b-it-bf16",
+            config={"iters": 300, "lr": 1e-4, "batch_size": 1},
+        )
         assert "sft" in name
         assert "gemma-3-1b" in name
 
     def test_includes_iters_and_lr(self):
-        name = train.build_run_name(stage="dpo", model="mlx-community/gemma-3-1b-it-bf16",
-                                    config={"iters": 500, "lr": 5e-6, "beta": 0.1})
+        name = train.build_run_name(
+            stage="dpo",
+            model="mlx-community/gemma-3-1b-it-bf16",
+            config={"iters": 500, "lr": 5e-6, "beta": 0.1},
+        )
         assert "iters500" in name
         assert "lr5e-06" in name or "lr5.0e-06" in name or "5e-06" in name

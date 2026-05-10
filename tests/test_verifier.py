@@ -2,9 +2,10 @@
 
 The judge is mocked so no LM Studio process is required.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,11 +25,12 @@ from langsimp.verifier import (
 
 class StubJudge(BaseJudge):
     """In-memory judge that returns a pre-set response."""
-    def __init__(self, response: Dict[str, Any]):
+
+    def __init__(self, response: dict[str, Any]):
         self.response = response
         self.calls: list[str] = []
 
-    def evaluate(self, prompt: str) -> Dict[str, Any]:
+    def evaluate(self, prompt: str) -> dict[str, Any]:
         self.calls.append(prompt)
         return self.response
 
@@ -89,9 +91,7 @@ class TestLocalJudgeAuth:
             captured["json"] = json
             captured["headers"] = headers
             resp = MagicMock()
-            resp.json.return_value = {
-                "choices": [{"message": {"content": '{"ok": 1}'}}]
-            }
+            resp.json.return_value = {"choices": [{"message": {"content": '{"ok": 1}'}}]}
             resp.raise_for_status.return_value = None
             return resp
 
@@ -108,18 +108,22 @@ class TestLocalJudgeAuth:
 
     def test_sends_bearer_when_api_key_set(self, monkeypatch):
         captured = self._mock_post(monkeypatch)
-        j = LocalJudge(base_url="https://openrouter.ai/api/v1",
-                       model_name="anthropic/claude-haiku-latest",
-                       api_key="sk-test-123")
+        j = LocalJudge(
+            base_url="https://openrouter.ai/api/v1",
+            model_name="anthropic/claude-haiku-latest",
+            api_key="sk-test-123",
+        )
         j.evaluate("hello")
         headers = captured.get("headers") or {}
         assert headers.get("Authorization") == "Bearer sk-test-123"
 
     def test_forwards_model_alias(self, monkeypatch):
         captured = self._mock_post(monkeypatch)
-        j = LocalJudge(base_url="https://openrouter.ai/api/v1",
-                       model_name="anthropic/claude-haiku-latest",
-                       api_key="sk-test-123")
+        j = LocalJudge(
+            base_url="https://openrouter.ai/api/v1",
+            model_name="anthropic/claude-haiku-latest",
+            api_key="sk-test-123",
+        )
         j.evaluate("hello")
         assert captured["json"]["model"] == "anthropic/claude-haiku-latest"
 
@@ -147,7 +151,10 @@ class TestLocalJudgeJsonParse:
 class TestDifficultyRanking:
     def _test_obj(self, **kwargs):
         return DifficultyRankingTest(
-            a1_samples=["short"], b1_samples=["long"], a2_samples=["med"], **kwargs,
+            a1_samples=["short"],
+            b1_samples=["long"],
+            a2_samples=["med"],
+            **kwargs,
         )
 
     def test_returns_1_when_judge_says_a2(self):
@@ -186,7 +193,9 @@ class TestDifficultyRankingClassify:
 
     def _t(self):
         return DifficultyRankingTest(
-            a1_samples=["short"], b1_samples=["long"], a2_samples=["med"],
+            a1_samples=["short"],
+            b1_samples=["long"],
+            a2_samples=["med"],
         )
 
     def test_returns_level_string(self):
@@ -289,7 +298,9 @@ class TestLengthRatioScore:
         src = " ".join(["w"] * 10)
         out = " ".join(["w"] * 11)  # 1.1x
         # With soft=1.0, hard=1.2, ratio 1.1 is halfway → 0.5
-        assert length_ratio_score(src, out, soft_cap=1.0, hard_cap=1.2) == pytest.approx(0.5, abs=0.01)
+        assert length_ratio_score(src, out, soft_cap=1.0, hard_cap=1.2) == pytest.approx(
+            0.5, abs=0.01
+        )
 
 
 class TestRewardVerifier:
@@ -299,8 +310,11 @@ class TestRewardVerifier:
 
     def test_averages_test_scores(self):
         class FixedScore:
-            def __init__(self, s): self.s = s
-            def run(self, text, judge): return self.s
+            def __init__(self, s):
+                self.s = s
+
+            def run(self, text, judge):
+                return self.s
 
         v = RewardVerifier(judge=StubJudge({}))
         v.add_test(FixedScore(1.0))
