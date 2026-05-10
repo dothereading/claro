@@ -109,7 +109,7 @@ class TestLocalJudgeAuth:
     def test_sends_bearer_when_api_key_set(self, monkeypatch):
         captured = self._mock_post(monkeypatch)
         j = LocalJudge(base_url="https://openrouter.ai/api/v1",
-                       model_name="anthropic/claude-haiku-4-5",
+                       model_name="anthropic/claude-haiku-latest",
                        api_key="sk-test-123")
         j.evaluate("hello")
         headers = captured.get("headers") or {}
@@ -118,10 +118,10 @@ class TestLocalJudgeAuth:
     def test_forwards_model_alias(self, monkeypatch):
         captured = self._mock_post(monkeypatch)
         j = LocalJudge(base_url="https://openrouter.ai/api/v1",
-                       model_name="anthropic/claude-haiku-4-5",
+                       model_name="anthropic/claude-haiku-latest",
                        api_key="sk-test-123")
         j.evaluate("hello")
-        assert captured["json"]["model"] == "anthropic/claude-haiku-4-5"
+        assert captured["json"]["model"] == "anthropic/claude-haiku-latest"
 
 
 class TestLocalJudgeJsonParse:

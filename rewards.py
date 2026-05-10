@@ -266,14 +266,14 @@ _MEANING = SemanticPreservationReward()
 
 
 _OPENROUTER_DEFAULT_URL = "https://openrouter.ai/api/v1"
-_OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
+_OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-latest"
 
 
 def _get_judge():
     """Lazy-load a judge from env. Backend selection:
 
       * MEANING_JUDGE_BACKEND=openrouter → OpenRouter (needs OPENROUTER_API_KEY).
-        Defaults: model=anthropic/claude-haiku-4-5, url=https://openrouter.ai/api/v1.
+        Defaults: model=anthropic/claude-haiku-latest, url=https://openrouter.ai/api/v1.
         Override via MEANING_JUDGE_MODEL / MEANING_JUDGE_URL.
       * MEANING_JUDGE_URL set            → local LM Studio (no auth).
       * neither                          → None; meaning_reward returns 0.5

@@ -387,7 +387,7 @@ class TestGetJudgeFactory:
         j = rewards._get_judge()
         assert j is not None
         assert j.api_key == "sk-or-test"
-        assert j.model == "anthropic/claude-haiku-4-5"
+        assert j.model == "anthropic/claude-haiku-latest"
         assert "openrouter.ai" in j.endpoint
 
     def test_openrouter_backend_without_key_raises(self, monkeypatch):
