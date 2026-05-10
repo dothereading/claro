@@ -76,6 +76,54 @@ class TestWindowedExcerpts:
         assert len(set(out)) == len(out)
 
 
+class TestLocalJudgeAuth:
+    """LocalJudge against a local LM Studio endpoint sends no auth header.
+    When `api_key` is set (e.g. for OpenRouter), it must send
+    `Authorization: Bearer <key>` so the request authenticates."""
+
+    def _mock_post(self, monkeypatch):
+        captured: dict = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            resp = MagicMock()
+            resp.json.return_value = {
+                "choices": [{"message": {"content": '{"ok": 1}'}}]
+            }
+            resp.raise_for_status.return_value = None
+            return resp
+
+        monkeypatch.setattr("verifier.requests.post", fake_post)
+        return captured
+
+    def test_no_auth_header_when_no_api_key(self, monkeypatch):
+        captured = self._mock_post(monkeypatch)
+        j = LocalJudge(base_url="http://x", model_name="m")
+        j.evaluate("hello")
+        # Either headers absent / None, or Authorization not present.
+        headers = captured.get("headers") or {}
+        assert "Authorization" not in headers
+
+    def test_sends_bearer_when_api_key_set(self, monkeypatch):
+        captured = self._mock_post(monkeypatch)
+        j = LocalJudge(base_url="https://openrouter.ai/api/v1",
+                       model_name="anthropic/claude-haiku-4-5",
+                       api_key="sk-test-123")
+        j.evaluate("hello")
+        headers = captured.get("headers") or {}
+        assert headers.get("Authorization") == "Bearer sk-test-123"
+
+    def test_forwards_model_alias(self, monkeypatch):
+        captured = self._mock_post(monkeypatch)
+        j = LocalJudge(base_url="https://openrouter.ai/api/v1",
+                       model_name="anthropic/claude-haiku-4-5",
+                       api_key="sk-test-123")
+        j.evaluate("hello")
+        assert captured["json"]["model"] == "anthropic/claude-haiku-4-5"
+
+
 class TestLocalJudgeJsonParse:
     def setup_method(self):
         self.j = LocalJudge(base_url="http://x", model_name="m")

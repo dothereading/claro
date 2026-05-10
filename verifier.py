@@ -56,11 +56,20 @@ class BaseTest(ABC):
 # --- Implementations ---
 
 class LocalJudge(BaseJudge):
-    """OpenAI-compatible local endpoint (LM Studio / vLLM / Ollama)."""
-    def __init__(self, base_url: str, model_name: str, temperature: float = 0.2):
+    """OpenAI-compatible chat endpoint. Works for LM Studio / vLLM / Ollama
+    (no auth) and for hosted gateways like OpenRouter (pass `api_key` to
+    send `Authorization: Bearer <key>`)."""
+    def __init__(
+        self,
+        base_url: str,
+        model_name: str,
+        temperature: float = 0.2,
+        api_key: Optional[str] = None,
+    ):
         self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self.model = model_name
         self.temperature = temperature
+        self.api_key = api_key
 
     def evaluate(self, prompt: str) -> Dict[str, Any]:
         payload = {
@@ -68,8 +77,9 @@ class LocalJudge(BaseJudge):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         try:
-            response = requests.post(self.endpoint, json=payload, timeout=180)
+            response = requests.post(self.endpoint, json=payload, headers=headers, timeout=180)
             response.raise_for_status()
             raw_content = response.json()["choices"][0]["message"]["content"]
             return self._parse_json(raw_content)

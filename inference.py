@@ -54,14 +54,23 @@ def load_model_with_adapter(model_id: str, adapter_path: Optional[str]):
     return load(model_id)
 
 
-def make_generate_fn(model, tokenizer, max_tokens: int = 512) -> Callable[[str], str]:
+def make_generate_fn(model, tokenizer, max_tokens: int = 512, temp: float = 0.0) -> Callable[[str], str]:
     """Closure that takes one complex paragraph and returns the cleaned
-    simplification using the SFT chat template."""
+    simplification using the SFT chat template.
+
+    `temp=0.0` is greedy decoding (deterministic — what eval uses).
+    `temp=0.8` is for variety sampling (what GRPO would use during rollout).
+    """
     from mlx_lm import generate
+    from mlx_lm.sample_utils import make_sampler
+    sampler = make_sampler(temp=temp)
 
     def gen(complex_text: str) -> str:
         prompt = build_prompt(complex_text, tokenizer)
-        raw = generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
+        raw = generate(
+            model, tokenizer, prompt=prompt,
+            max_tokens=max_tokens, verbose=False, sampler=sampler,
+        )
         return clean_generation(raw)
 
     return gen

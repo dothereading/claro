@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
-from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
@@ -29,9 +28,20 @@ from wordfreq import top_n_list
 
 from verifier import BaseJudge, split_sentences
 
-# Top-2000 most common English words. CEFR-A2 vocabulary roughly tracks
-# the 1500-2000-most-common floor. Loaded once at import time.
-COMMON_WORDS: frozenset[str] = frozenset(top_n_list("en", 2000))
+# Default common-word list size. Top-3000 strikes the right balance: the
+# bare top-2000 misses common A2 concrete vocabulary (e.g. "tower",
+# "destroyed", "stands"), while top-5000+ stops penalizing real B1+
+# academic prose. Calibrated against data/{sft,dpo}.jsonl — see
+# TestVocabSimplicityCalibration. Cached per-N at module level so the
+# wordfreq import cost is paid once.
+_DEFAULT_TOP_N = 3000
+_COMMON_WORDS_CACHE: dict[int, frozenset[str]] = {}
+
+
+def _common_words(top_n: int) -> frozenset[str]:
+    if top_n not in _COMMON_WORDS_CACHE:
+        _COMMON_WORDS_CACHE[top_n] = frozenset(top_n_list("en", top_n))
+    return _COMMON_WORDS_CACHE[top_n]
 
 
 @dataclass
@@ -106,12 +116,18 @@ def _is_likely_proper_noun(word: str, position_in_sentence: int) -> bool:
 
 
 class VocabSimplicityReward(RewardComponent):
-    """Per-sentence: count words not in COMMON_WORDS (skipping proper nouns).
-    Penalty kicks in once that count exceeds `allowed_uncommon` per sentence.
-    Reward = 1 - (mean penalty across sentences), clipped to [0, 1]."""
+    """Per-sentence: count words not in the top-N most common English words
+    (skipping proper nouns). Penalty kicks in once that count exceeds
+    `allowed_uncommon` per sentence. Reward = 1 - (mean penalty across
+    sentences), clipped to [0, 1].
+
+    Defaults (top_n=3000, allowed=1, severity=0.5) calibrated against
+    chosen/rejected/bad distributions in data/{sft,dpo}.jsonl. See
+    TestVocabSimplicityCalibration for the regression targets."""
     name = "vocab"
 
-    def __init__(self, allowed_uncommon: int = 2, severity: float = 0.25):
+    def __init__(self, top_n: int = _DEFAULT_TOP_N, allowed_uncommon: int = 1, severity: float = 0.5):
+        self.common_words = _common_words(top_n)
         self.allowed_uncommon = allowed_uncommon
         self.severity = severity  # how much each excess uncommon word costs
 
@@ -126,7 +142,7 @@ class VocabSimplicityReward(RewardComponent):
             for i, tok in enumerate(tokens):
                 if _is_likely_proper_noun(tok, i):
                     continue
-                if tok.lower() not in COMMON_WORDS:
+                if tok.lower() not in self.common_words:
                     uncommon += 1
             excess = max(0, uncommon - self.allowed_uncommon)
             penalties.append(min(1.0, excess * self.severity))
@@ -237,28 +253,55 @@ class CombinedReward(RewardComponent):
 # ---------- mlx_lm_lora @register_reward_function adapters ----------
 #
 # mlx_lm_lora calls reward functions with the signature
-#   (prompts: list[str], completions: list[str], answers: list[str],
+#   (prompts: list[str], completions: list[str], answer: list[str],
 #    types: list[str] | None) -> list[float]
-# Returning one float in [0, 1] per (prompt, completion). The framework
-# picks them up by name via --reward-functions and --reward-functions-file.
+# Note: the framework passes `answer` as a *singular* kwarg even though it
+# is a list — the param name is part of the contract. Returning one float
+# in [0, 1] per (prompt, completion). The framework picks the functions up
+# by name via --reward-functions and --reward-functions-file.
 
 _LENGTH = LengthVsSourceReward()
 _VOCAB = VocabSimplicityReward()
 _MEANING = SemanticPreservationReward()
 
 
+_OPENROUTER_DEFAULT_URL = "https://openrouter.ai/api/v1"
+_OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
+
+
 def _get_judge():
-    """Lazy-load LocalJudge from env. None if MEANING_JUDGE_URL not set,
-    in which case meaning reward returns its 0.5 fallback (constant
-    contribution to combined → no signal but no crash)."""
+    """Lazy-load a judge from env. Backend selection:
+
+      * MEANING_JUDGE_BACKEND=openrouter → OpenRouter (needs OPENROUTER_API_KEY).
+        Defaults: model=anthropic/claude-haiku-4-5, url=https://openrouter.ai/api/v1.
+        Override via MEANING_JUDGE_MODEL / MEANING_JUDGE_URL.
+      * MEANING_JUDGE_URL set            → local LM Studio (no auth).
+      * neither                          → None; meaning_reward returns 0.5
+        (constant contribution → no signal but no crash).
+    """
     import os
+    if hasattr(_get_judge, "_cached"):
+        return _get_judge._cached
+
+    backend = os.environ.get("MEANING_JUDGE_BACKEND", "").lower()
+    from verifier import LocalJudge
+
+    if backend == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "MEANING_JUDGE_BACKEND=openrouter but OPENROUTER_API_KEY is not set"
+            )
+        url = os.environ.get("MEANING_JUDGE_URL", _OPENROUTER_DEFAULT_URL)
+        model = os.environ.get("MEANING_JUDGE_MODEL", _OPENROUTER_DEFAULT_MODEL)
+        _get_judge._cached = LocalJudge(base_url=url, model_name=model, api_key=api_key)
+        return _get_judge._cached
+
     url = os.environ.get("MEANING_JUDGE_URL")
     if not url:
         return None
-    if not hasattr(_get_judge, "_cached"):
-        from verifier import LocalJudge
-        model = os.environ.get("MEANING_JUDGE_MODEL", "google/gemma-4-26b-a4b")
-        _get_judge._cached = LocalJudge(base_url=url, model_name=model)
+    model = os.environ.get("MEANING_JUDGE_MODEL", "google/gemma-4-26b-a4b")
+    _get_judge._cached = LocalJudge(base_url=url, model_name=model)
     return _get_judge._cached
 
 
@@ -273,27 +316,27 @@ except ImportError:
 
 
 @register_reward_function()
-def length_reward(prompts, completions, answers, types=None) -> list[float]:
+def length_reward(prompts, completions, answer, types=None) -> list[float]:
     return [
         _LENGTH.compute(c, RewardContext(source=p, answer=a))
-        for p, c, a in zip(prompts, completions, answers)
+        for p, c, a in zip(prompts, completions, answer)
     ]
 
 
 @register_reward_function()
-def vocab_reward(prompts, completions, answers, types=None) -> list[float]:
+def vocab_reward(prompts, completions, answer, types=None) -> list[float]:
     return [
         _VOCAB.compute(c, RewardContext(source=p, answer=a))
-        for p, c, a in zip(prompts, completions, answers)
+        for p, c, a in zip(prompts, completions, answer)
     ]
 
 
 @register_reward_function()
-def meaning_reward(prompts, completions, answers, types=None) -> list[float]:
+def meaning_reward(prompts, completions, answer, types=None) -> list[float]:
     judge = _get_judge()
     return [
         _MEANING.compute(c, RewardContext(source=p, answer=a), judge=judge)
-        for p, c, a in zip(prompts, completions, answers)
+        for p, c, a in zip(prompts, completions, answer)
     ]
 
 
@@ -360,6 +403,63 @@ def compute_variety(
 
 # ---------- CLI ----------
 
+def _variety_cli(args) -> None:
+    """Sample G rollouts per prompt from a real adapter; report reward
+    std per group. GRPO advantage = (reward - mean) / std within a group;
+    if std ≈ 0 across most groups, GRPO can't learn — this catches that
+    BEFORE we burn training compute."""
+    from inference import load_model_with_adapter, make_generate_fn
+
+    judge = None
+    if args.with_judge:
+        from verifier import LocalJudge
+        judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
+
+    # Load prompts. Accept either GRPO-shape (`prompt`) or SFT-shape (`complex`).
+    prompts: list[str] = []
+    with open(args.prompts_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            prompts.append(r.get("prompt") or r.get("complex"))
+            if len(prompts) >= args.n_prompts:
+                break
+    print(f"[variety] {len(prompts)} prompts × {args.group_size} rollouts at temp={args.temperature}", flush=True)
+
+    adapter_path = None if args.adapter == "base" else args.adapter
+    model, tokenizer = load_model_with_adapter(args.model, adapter_path)
+    gen = make_generate_fn(model, tokenizer, max_tokens=args.max_tokens, temp=args.temperature)
+
+    rollouts_per_prompt: list[list[str]] = []
+    for i, p in enumerate(prompts):
+        rollouts: list[str] = []
+        for j in range(args.group_size):
+            out = gen(p)
+            rollouts.append(out)
+            print(f"  [{i+1}/{len(prompts)}, rollout {j+1}/{args.group_size}] {len(out.split())}w", flush=True)
+        rollouts_per_prompt.append(rollouts)
+
+    stats = compute_variety(prompts, rollouts_per_prompt, judge=judge)
+    print(f"\n=== REWARD VARIETY ({len(prompts)} prompts, G={args.group_size}) ===")
+    print(f"  mean across-group std : {stats['mean_std']:.4f}")
+    print(f"  min  across-group std : {stats['min_std']:.4f}")
+    print(f"  max  across-group std : {stats['max_std']:.4f}")
+    if stats["mean_std"] < 0.05:
+        print("  ⚠️  mean std < 0.05 — GRPO advantage signal will be weak!")
+    print(f"\n=== PER-PROMPT BREAKDOWN ===")
+    for i, (p, prompt_text, rollouts) in enumerate(zip(stats["per_prompt"], prompts, rollouts_per_prompt)):
+        print(f"\n[{i+1}] mean={p['mean']:.3f} std={p['std']:.4f}  rewards={[round(r, 3) for r in p['rewards']]}")
+        if args.show_rollouts:
+            print(f"    SOURCE ({len(prompt_text.split())}w): {prompt_text[:140]}…")
+            for j, (r, score) in enumerate(zip(rollouts, p['rewards'])):
+                # Per-component scores for this rollout
+                comp = audit_record(prompt_text, r, judge=judge)
+                print(f"    [rollout {j+1} | combined={score:.3f} L={comp['length']:.2f} V={comp['vocab']:.2f} M={comp['meaning']:.2f}] {len(r.split())}w")
+                print(f"      {r[:200]}…" if len(r) > 200 else f"      {r}")
+
+
 def _audit_cli(args) -> None:
     """Score a JSONL of {complex, simple} (or {complex, output}) records."""
     judge = None
@@ -416,9 +516,25 @@ def main() -> None:
     audit.add_argument("--limit", type=int, default=0)
     audit.add_argument("--show-worst", type=int, default=5)
 
+    variety = sub.add_parser("variety", help="sample rollouts from an adapter and report reward std per group")
+    variety.add_argument("--adapter", required=True, help="adapter dir or 'base' for no adapter")
+    variety.add_argument("--prompts-path", default="data/grpo/train.jsonl")
+    variety.add_argument("--n-prompts", type=int, default=5)
+    variety.add_argument("--group-size", type=int, default=4)
+    variety.add_argument("--temperature", type=float, default=0.8)
+    variety.add_argument("--max-tokens", type=int, default=512)
+    variety.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
+    variety.add_argument("--with-judge", action="store_true")
+    variety.add_argument("--show-rollouts", action="store_true",
+                         help="print each rollout's text and per-component scores")
+    variety.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1")
+    variety.add_argument("--judge-model", default="google/gemma-4-26b-a4b")
+
     args = p.parse_args()
     if args.cmd == "audit":
         _audit_cli(args)
+    elif args.cmd == "variety":
+        _variety_cli(args)
 
 
 if __name__ == "__main__":

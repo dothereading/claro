@@ -124,6 +124,54 @@ class TestVocabSimplicityReward:
         assert self.r.compute("", self._ctx()) == 1.0
 
 
+class TestVocabSimplicityCalibration:
+    """Calibration regression test: vocab reward must clearly separate
+    A2-style outputs from B1+ academic prose.
+
+    Targets (set after sweeping params over the real chosen/rejected/bad
+    distributions in data/{sft,dpo}.jsonl; aim for bad clearly below the
+    0.5 meaning gate, not at it):
+      * good A2 text          → score ≥ 0.85
+      * bad B1+ text          → score ≤ 0.40
+      * good - bad gap        ≥ 0.45
+    """
+
+    GOOD_A2 = (
+        "Washington is a city in the United States. "
+        "It is the capital of the country. "
+        "It is on the east coast, between Virginia and Maryland. "
+        "Many people work for the government there."
+    )
+    # Real B1+ paragraph (a Wikipedia lead from data/sft.jsonl). Multiple
+    # sentences each carrying technical vocab — closer to the median-bad
+    # case observed in the calibration sweep (mean bad ≈ 0.39).
+    BAD_B1 = (
+        "François Magendie was a French physiologist, considered a pioneer "
+        "of experimental physiology. He is known for describing the foramen "
+        "of Magendie. There is also a Magendie sign, a downward and inward "
+        "rotation of the eye due to a lesion in the cerebellum. Magendie "
+        "was a faculty at the College of France, holding the Chair of "
+        "Medicine from 1830 to 1855."
+    )
+
+    def test_good_a2_scores_high(self):
+        r = rewards.VocabSimplicityReward()
+        s = r.compute(self.GOOD_A2, rewards.RewardContext(source="x"))
+        assert s >= 0.85, f"good A2 only scored {s:.3f}"
+
+    def test_bad_b1_scores_low(self):
+        r = rewards.VocabSimplicityReward()
+        s = r.compute(self.BAD_B1, rewards.RewardContext(source="x"))
+        assert s <= 0.40, f"bad B1+ scored too high: {s:.3f}"
+
+    def test_separation_at_least_0_45(self):
+        r = rewards.VocabSimplicityReward()
+        ctx = rewards.RewardContext(source="x")
+        good = r.compute(self.GOOD_A2, ctx)
+        bad = r.compute(self.BAD_B1, ctx)
+        assert good - bad >= 0.45, f"gap too small: good={good:.3f} bad={bad:.3f}"
+
+
 # ---------- SemanticPreservationReward ----------
 
 class TestSemanticPreservationReward:
@@ -266,6 +314,87 @@ class TestAuditRecord:
         # Without judge it falls back to mid score
         out2 = rewards.audit_record("source text", "output text", judge=None)
         assert out2["meaning"] == pytest.approx(0.5)
+
+
+class TestRewardFunctionKwargs:
+    """mlx-lm-lora invokes registered reward functions with the call shape
+    `reward_func(prompts=..., completions=..., answer=..., types=...)`.
+    The kwarg is `answer` (singular). Our wrappers must accept that exact
+    keyword or training crashes immediately."""
+
+    def test_length_reward_accepts_answer_kwarg(self):
+        out = rewards.length_reward(
+            prompts=["a b c d e"],
+            completions=["a b c d"],
+            answer=["x y z"],
+            types=None,
+        )
+        assert isinstance(out, list) and len(out) == 1
+        assert isinstance(out[0], float)
+
+    def test_vocab_reward_accepts_answer_kwarg(self):
+        out = rewards.vocab_reward(
+            prompts=["src"],
+            completions=["The cat sat on the mat."],
+            answer=["ref"],
+            types=None,
+        )
+        assert isinstance(out, list) and len(out) == 1
+
+    def test_meaning_reward_accepts_answer_kwarg(self):
+        # No judge configured → fallback 0.5 per item, no HTTP.
+        out = rewards.meaning_reward(
+            prompts=["src"],
+            completions=["out"],
+            answer=["ref"],
+            types=None,
+        )
+        assert out == [0.5]
+
+
+class TestGetJudgeFactory:
+    """`rewards._get_judge` picks a backend from env vars:
+      * MEANING_JUDGE_BACKEND=openrouter  → OpenRouter (requires OPENROUTER_API_KEY)
+      * MEANING_JUDGE_URL set             → local LM Studio (back-compat path)
+      * neither                           → None (meaning reward returns 0.5)
+    """
+
+    def setup_method(self):
+        # Drop the function-attribute cache between tests.
+        if hasattr(rewards._get_judge, "_cached"):
+            del rewards._get_judge._cached
+
+    def test_returns_none_when_nothing_set(self, monkeypatch):
+        monkeypatch.delenv("MEANING_JUDGE_BACKEND", raising=False)
+        monkeypatch.delenv("MEANING_JUDGE_URL", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert rewards._get_judge() is None
+
+    def test_local_path_when_only_url_set(self, monkeypatch):
+        monkeypatch.delenv("MEANING_JUDGE_BACKEND", raising=False)
+        monkeypatch.setenv("MEANING_JUDGE_URL", "http://127.0.0.1:1234/v1")
+        monkeypatch.setenv("MEANING_JUDGE_MODEL", "google/gemma-4-26b-a4b")
+        j = rewards._get_judge()
+        assert j is not None
+        assert j.api_key is None
+        assert "127.0.0.1" in j.endpoint
+
+    def test_openrouter_path_uses_haiku_default_and_key(self, monkeypatch):
+        monkeypatch.setenv("MEANING_JUDGE_BACKEND", "openrouter")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        monkeypatch.delenv("MEANING_JUDGE_MODEL", raising=False)
+        monkeypatch.delenv("MEANING_JUDGE_URL", raising=False)
+        j = rewards._get_judge()
+        assert j is not None
+        assert j.api_key == "sk-or-test"
+        assert j.model == "anthropic/claude-haiku-4-5"
+        assert "openrouter.ai" in j.endpoint
+
+    def test_openrouter_backend_without_key_raises(self, monkeypatch):
+        monkeypatch.setenv("MEANING_JUDGE_BACKEND", "openrouter")
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+            rewards._get_judge()
 
 
 class TestRewardVariety:

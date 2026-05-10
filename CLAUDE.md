@@ -1,6 +1,6 @@
 # Project: Language Simplification LLM
 
-Fine-tuning a small Gemma model to rewrite complex English at CEFR A2 level. See `PLAN.md` for the staged pipeline (data → SFT → GRPO → DPO → eval).
+Fine-tuning a small Gemma model to rewrite complex English at CEFR A2 level. See `PLAN.md` for the staged pipeline (data → SFT → DPO → GRPO → eval).
 
 ## Code style: deep modules, not shallow scripts
 

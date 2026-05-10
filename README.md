@@ -1,6 +1,6 @@
 # Language Simplification Fine-Tuning
 
-Fine-tune a small Gemma model to rewrite complex English at **CEFR A2** (Elementary) level. See [`PLAN.md`](PLAN.md) for the staged pipeline (data → SFT → GRPO → DPO → eval) and [`CLAUDE.md`](CLAUDE.md) for the development conventions used in this repo.
+Fine-tune a small Gemma model to rewrite complex English at **CEFR A2** (Elementary) level. See [`PLAN.md`](PLAN.md) for the staged pipeline (data → SFT → DPO → GRPO → eval) and [`CLAUDE.md`](CLAUDE.md) for the development conventions used in this repo.
 
 ## Layout
 
@@ -29,7 +29,7 @@ eval_results/     Per-adapter eval JSON + summaries (gitignored)
 
 ```bash
 uv sync
-echo "OPENROUTER_API_KEY=sk-..." > .env   # only needed for distill.py
+echo "OPENROUTER_API_KEY=sk-..." > .env   # used by distill.py and (optionally) the GRPO meaning judge
 ```
 
 ## Pipeline
@@ -54,9 +54,18 @@ uv run python mlx_data.py grpo    # 134 train + 30 GRPO-valid (separate from eva
 #    metrics to Weights & Biases live. Set WANDB_MODE=disabled to opt out.
 bash scripts/train_mlx.sh         # SFT
 bash scripts/train_dpo_mlx.sh     # DPO,  resumes from adapters/sft/latest
-bash scripts/train_grpo_mlx.sh    # GRPO, resumes from adapters/dpo/latest
-                                  # (set MEANING_JUDGE_URL=http://127.0.0.1:1234/v1
-                                  #  to enable the meaning reward via LM Studio)
+bash scripts/train_grpo_mlx.sh    # GRPO, resumes from adapters/dpo/latest by default
+
+# GRPO meaning-reward judge — pick one:
+#   * OpenRouter (recommended; defaults to anthropic/claude-haiku-4-5):
+#       MEANING_JUDGE_BACKEND=openrouter bash scripts/train_grpo_mlx.sh
+#   * Local LM Studio at http://127.0.0.1:1234/v1:
+#       MEANING_JUDGE_URL=http://127.0.0.1:1234/v1 bash scripts/train_grpo_mlx.sh
+#   * No judge (meaning reward returns a constant 0.5):
+#       bash scripts/train_grpo_mlx.sh
+#
+# To start GRPO from the base model (skip the DPO resume — useful while
+# SFT/DPO are still weak): RESUME_ADAPTER="" bash scripts/train_grpo_mlx.sh
 
 # 6. Evaluate against the frozen held-out set (requires LM Studio).
 uv run python eval_harness.py --adapter base                  # baseline
@@ -68,9 +77,27 @@ uv run python generate.py --adapter adapters/sft/latest --show-source "Complex p
 cat input.txt | uv run python generate.py --adapter adapters/sft/latest
 ```
 
+## GRPO reward sanity tools
+
+`rewards.py` doubles as an offline audit tool. Use it before/after training to verify the rewards are calibrated and producing variance:
+
+```bash
+# Score a JSONL of {complex, simple} or {complex, output} records.
+# Surfaces the mean per-component score and the worst-scoring records.
+uv run python rewards.py audit data/sft.jsonl
+uv run python rewards.py audit data/sft.jsonl --with-judge --lm-studio-url http://127.0.0.1:1234/v1
+
+# Sample G rollouts per prompt from an adapter and report the per-group
+# reward std. GRPO advantage = (reward - mean) / std within a group; if
+# std ≈ 0 across most groups, GRPO can't learn — this catches that BEFORE
+# burning training compute.
+uv run python rewards.py variety --adapter adapters/sft/latest \
+    --n-prompts 5 --group-size 4 --show-rollouts
+```
+
 ## Verifier / prompt iteration
 
-`verifier.py` runs CEFR-level classification through a local LM Studio judge (`http://127.0.0.1:1234`) and exposes pure-Python signals (`PacingVarietyTest`, `length_ratio_score`).
+`verifier.py` runs CEFR-level classification through a chat-completions judge — by default the local LM Studio at `http://127.0.0.1:1234`, but `LocalJudge(api_key=...)` also works against OpenRouter or any OpenAI-compatible endpoint. Pure-Python signals (`PacingVarietyTest`, `length_ratio_score`) need no judge.
 
 Use `iterate.py` to compare prompt variants on a single paragraph (qualitative):
 
