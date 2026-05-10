@@ -58,15 +58,19 @@ SFT_SYSTEM_PROMPT = (
 
 REJECTED_SUMMARIZE_PROMPT = (
     "Summarize the following text in 3 short sentences. Be concise. "
-    "Output only the summary."
+    "Output ONLY the summary as plain prose — no markdown, no headings, "
+    "no bullet points, no titles."
 )
 
 REJECTED_ELI5_PROMPT = (
     "Explain the following text to a 5-year-old. Use very small words and "
-    "very short sentences. Output only the explanation."
+    "very short sentences. Output ONLY the explanation as plain prose — "
+    "no markdown, no headings, no bullet points, no titles."
 )
 
 REJECTED_CLARIFY_PROMPT = (
     "Rewrite the following text to make it clearer and easier to follow. "
-    "Keep all the important details and nuance. Output only the rewritten text."
+    "Keep all the important details and nuance. Output ONLY the rewritten "
+    "text as plain prose — no markdown, no headings, no bullet points, "
+    "no titles."
 )
