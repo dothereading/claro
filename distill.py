@@ -18,16 +18,81 @@ import argparse
 import asyncio
 import json
 import os
+import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from prompts import DISTILL_SYSTEM_PROMPT
+from prompts import (
+    DISTILL_SYSTEM_PROMPT,
+    REJECTED_CLARIFY_PROMPT,
+    REJECTED_ELI5_PROMPT,
+    REJECTED_SUMMARIZE_PROMPT,
+)
 from sources import WikiParagraph, fetch_random_paragraphs
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+
+# ---------- DPO rejected-strategy mix ----------
+#
+# DPO learns "for prompt P, prefer chosen over rejected." If every rejected
+# example fails the same way (e.g. always "Gemma-3-4B's mistakes with the
+# A2 prompt"), the model learns to avoid THAT specific pattern but may not
+# generalize to other failure modes.
+#
+# We diversify the rejected pool: majority are the original weak-model
+# baseline (so DPO has a strong primary signal), with smaller buckets that
+# fail in *different* ways — wrong task, wrong target level, no A2
+# constraint at all.
+
+@dataclass
+class RejectedStrategy:
+    name: str            # used in output records for downstream analysis
+    weight: float        # share of the rejected pool, must sum to 1.0
+    model: str           # OpenRouter model alias to call
+    prompt: str          # system prompt (NOT the SFT prompt)
+
+
+def build_dpo_strategies(weak_teacher: str, strong_teacher: str) -> list[RejectedStrategy]:
+    """Default mix: 60% weak-model + same prompt, 40% strong-model + alt prompts.
+
+    The 60% majority preserves the bulk DPO signal (a coherent "good vs
+    mediocre A2" boundary). The 40% diversity exposes the model to other
+    things to avoid.
+    """
+    return [
+        RejectedStrategy("weak-distill", 0.60, weak_teacher, DISTILL_SYSTEM_PROMPT),
+        RejectedStrategy("summarize",    0.15, strong_teacher, REJECTED_SUMMARIZE_PROMPT),
+        RejectedStrategy("eli5",         0.15, strong_teacher, REJECTED_ELI5_PROMPT),
+        RejectedStrategy("clarify",      0.10, strong_teacher, REJECTED_CLARIFY_PROMPT),
+    ]
+
+
+def pick_strategies(
+    n: int, strategies: list[RejectedStrategy], seed: int = 0,
+) -> list[RejectedStrategy]:
+    """Deterministically assign one strategy per record.
+
+    Uses round(weight * n) for each strategy and assigns any rounding
+    remainder to the last bucket. For small n the smaller buckets may not
+    appear at all — that's intentional, better than random sampling that
+    would skew at the n=15 scale we use for testing.
+    """
+    counts = [round(s.weight * n) for s in strategies]
+    counts[-1] += n - sum(counts)
+    if any(c < 0 for c in counts):
+        # Underweighted strategies stole from the last bucket; clamp.
+        counts = [max(0, c) for c in counts]
+        counts[-1] += n - sum(counts)
+    assignments: list[RejectedStrategy] = []
+    for s, c in zip(strategies, counts):
+        assignments.extend([s] * c)
+    random.Random(seed).shuffle(assignments)
+    return assignments
 
 
 class Teacher:
@@ -182,21 +247,35 @@ async def _dpo_run(args: argparse.Namespace) -> None:
             if args.limit and len(records) >= args.limit:
                 break
 
-    teacher = Teacher.from_env(
-        model=args.teacher,
-        max_retries=args.max_retries,
-        temperature=args.temperature,
-    )
+    # Build strategy mix and assign one to each record.
+    strategies = build_dpo_strategies(args.weak_teacher, args.strong_teacher)
+    assignments = pick_strategies(len(records), strategies, seed=args.seed)
+    counts = {s.name: 0 for s in strategies}
+    for a in assignments:
+        counts[a.name] += 1
+    print(f"strategy mix for {len(records)} records: {counts}", flush=True)
+
+    # Cache one Teacher per unique model (avoid re-creating the OpenAI client).
+    teachers: dict[str, Teacher] = {}
+    def get_teacher(model: str) -> Teacher:
+        if model not in teachers:
+            teachers[model] = Teacher.from_env(
+                model=model, max_retries=args.max_retries, temperature=args.temperature,
+            )
+        return teachers[model]
+
     semaphore = asyncio.Semaphore(args.concurrency)
     write_lock = asyncio.Lock()
     kept = 0
     mode = "a" if (args.resume and out_path.exists()) else "w"
 
-    async def process(idx: int, r: dict, fout):
+    async def process(idx: int, r: dict, strategy: RejectedStrategy, fout):
         nonlocal kept
+        teacher = get_teacher(strategy.model)
         async with semaphore:
-            rejected = await teacher.simplify(DISTILL_SYSTEM_PROMPT, r["complex"])
+            rejected = await teacher.simplify(strategy.prompt, r["complex"])
         if rejected is None:
+            print(f"[{idx}] FAILED ({strategy.name}) — {r.get('title', '')}", flush=True)
             return
         out = {
             "prompt": r["complex"],
@@ -205,17 +284,21 @@ async def _dpo_run(args: argparse.Namespace) -> None:
             "title": r.get("title"),
             "url": r.get("url"),
             "chosen_model": r.get("model"),
-            "rejected_model": args.teacher,
+            "rejected_model": strategy.model,
+            "rejected_strategy": strategy.name,
         }
         async with write_lock:
             fout.write(json.dumps(out, ensure_ascii=False) + "\n")
             fout.flush()
             kept += 1
-            print(f"[{idx}] ok — {r.get('title', '')}", flush=True)
+            print(f"[{idx}] ok ({strategy.name}) — {r.get('title', '')}", flush=True)
 
-    print(f"streaming {len(records)} completions from {args.teacher} → {out_path}", flush=True)
+    print(f"streaming {len(records)} rejected completions → {out_path}", flush=True)
     with open(out_path, mode) as fout:
-        tasks = [asyncio.create_task(process(i, r, fout)) for i, r in enumerate(records)]
+        tasks = [
+            asyncio.create_task(process(i, r, s, fout))
+            for i, (r, s) in enumerate(zip(records, assignments))
+        ]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
     print(f"wrote {kept}/{len(records)} examples to {out_path}", flush=True)
@@ -238,14 +321,22 @@ def _build_parser() -> argparse.ArgumentParser:
     sft.add_argument("--min-words", type=int, default=60)
     sft.add_argument("--max-words", type=int, default=220)
 
-    dpo = sub.add_parser("dpo", help="add weaker-teacher 'rejected' completions to SFT pairs")
+    dpo = sub.add_parser(
+        "dpo",
+        help="generate diversified 'rejected' completions for DPO training",
+    )
     dpo.add_argument("--input", default=str(REPO_ROOT / "data" / "sft.jsonl"))
     dpo.add_argument("--output", default=str(REPO_ROOT / "data" / "dpo.jsonl"))
-    dpo.add_argument("--teacher", default="google/gemma-3-4b-it")
+    dpo.add_argument("--weak-teacher", default="google/gemma-3-4b-it",
+                     help="model for the 'mediocre A2 attempt' strategy (60%% of records)")
+    dpo.add_argument("--strong-teacher", default="~anthropic/claude-haiku-latest",
+                     help="model for the alternative-prompt strategies (40%% of records)")
     dpo.add_argument("--concurrency", type=int, default=8)
     dpo.add_argument("--max-retries", type=int, default=3)
     dpo.add_argument("--temperature", type=float, default=0.4)
     dpo.add_argument("--limit", type=int, default=0, help="0 = all")
+    dpo.add_argument("--seed", type=int, default=0,
+                     help="determines per-record strategy assignment")
     dpo.add_argument("--resume", action="store_true",
                      help="skip prompts already present in output")
     return p

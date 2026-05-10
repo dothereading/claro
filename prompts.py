@@ -44,3 +44,29 @@ SFT_SYSTEM_PROMPT = (
     "sentences, basic vocabulary, no idioms. Keep all important facts. Output "
     "only the rewritten text."
 )
+
+
+# ---------- DPO "rejected" generators ----------
+#
+# Used to produce *bad* simplifications that fail in distinct ways from
+# a good A2 rewrite. We deliberately do NOT mention CEFR or A2 in these,
+# so a strong model (e.g. Haiku) faithfully produces output that is
+# either not a simplification, or simplifies along the wrong axis.
+#
+# Diversifying the rejected pool teaches DPO to avoid a broader range of
+# failure modes than "what a smaller model produces with our normal prompt."
+
+REJECTED_SUMMARIZE_PROMPT = (
+    "Summarize the following text in 3 short sentences. Be concise. "
+    "Output only the summary."
+)
+
+REJECTED_ELI5_PROMPT = (
+    "Explain the following text to a 5-year-old. Use very small words and "
+    "very short sentences. Output only the explanation."
+)
+
+REJECTED_CLARIFY_PROMPT = (
+    "Rewrite the following text to make it clearer and easier to follow. "
+    "Keep all the important details and nuance. Output only the rewritten text."
+)
