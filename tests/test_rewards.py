@@ -239,3 +239,47 @@ class TestCombinedReward:
             (0.5, Fixed(1.0)),
         ])
         assert c.compute("x", rewards.RewardContext(source="s")) == pytest.approx(1.0)
+
+
+# ---------- audit + variety helpers (used by the CLI) ----------
+
+class TestAuditRecord:
+    def test_returns_per_component_scores(self):
+        out = rewards.audit_record(
+            source="cats sleep",
+            output="cats sleep here",
+            judge=None,
+        )
+        # Should include each active component, plus 'combined'
+        assert "length" in out
+        assert "vocab" in out
+        assert "meaning" in out
+        assert "combined" in out
+        for k, v in out.items():
+            assert isinstance(v, float)
+            assert 0.0 <= v <= 1.0
+
+    def test_meaning_uses_judge_when_given(self):
+        judge = StubJudge({"facts_preserved": 5, "no_hallucinations": 5})
+        out = rewards.audit_record("source text", "output text", judge=judge)
+        assert out["meaning"] == pytest.approx(1.0)
+        # Without judge it falls back to mid score
+        out2 = rewards.audit_record("source text", "output text", judge=None)
+        assert out2["meaning"] == pytest.approx(0.5)
+
+
+class TestRewardVariety:
+    def test_returns_per_prompt_stats(self):
+        # Fake "rollouts": 3 prompts × 4 completions per prompt
+        prompts = ["src1", "src2", "src3"]
+        rollouts_per_prompt = [
+            ["a a a", "b b b b b b b b", "c c c c", "d d d d d"],   # prompt 0
+            ["e e e e e e", "f f", "g g g g g g g g g g", "h h h"],  # prompt 1
+            ["i i i", "j j j", "k k k", "l l l"],                   # prompt 2 — uniform-ish
+        ]
+        stats = rewards.compute_variety(prompts, rollouts_per_prompt, judge=None)
+        assert len(stats["per_prompt"]) == 3
+        assert "mean_std" in stats  # average reward std across groups
+        for p in stats["per_prompt"]:
+            assert "mean" in p and "std" in p and "rewards" in p
+            assert len(p["rewards"]) == 4

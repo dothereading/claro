@@ -269,3 +269,131 @@ def meaning_reward_fn(prompts, completions, judge=None, **_) -> list[float]:
         _MEANING.compute(c, RewardContext(source=p), judge=judge)
         for p, c in zip(prompts, completions)
     ]
+
+
+# ---------- audit + variety (offline diagnostics) ----------
+#
+# Used to verify rewards make sense before training, and to monitor reward
+# variance per group during/after training. Reward variance ≈ 0 inside a
+# GRPO group means the advantage signal is dead.
+
+def _default_combined() -> CombinedReward:
+    return CombinedReward(
+        components=[
+            (0.50, _MEANING),
+            (0.25, _LENGTH),
+            (0.25, _VOCAB),
+        ],
+        meaning_gate=0.5,
+    )
+
+
+def audit_record(source: str, output: str, judge: Optional[BaseJudge] = None) -> dict[str, float]:
+    """Per-component scores for one (source, output) pair, plus combined."""
+    ctx = RewardContext(source=source)
+    out = {
+        "length": _LENGTH.compute(output, ctx),
+        "vocab": _VOCAB.compute(output, ctx),
+        "meaning": _MEANING.compute(output, ctx, judge=judge),
+    }
+    out["combined"] = _default_combined().compute(output, ctx, judge=judge)
+    return out
+
+
+def compute_variety(
+    prompts: list[str],
+    rollouts_per_prompt: list[list[str]],
+    judge: Optional[BaseJudge] = None,
+) -> dict:
+    """For each prompt, score its rollouts and report mean/std.
+
+    GRPO advantage = (reward - mean) / std within each group; if std ≈ 0
+    the gradient is zero and no learning happens. This function tells us
+    whether our rewards are *discriminating* between rollouts.
+    """
+    import statistics
+    combined = _default_combined()
+    per_prompt: list[dict] = []
+    stds: list[float] = []
+    for p, rollouts in zip(prompts, rollouts_per_prompt):
+        scores = [
+            combined.compute(r, RewardContext(source=p), judge=judge)
+            for r in rollouts
+        ]
+        mean_s = statistics.mean(scores) if scores else 0.0
+        std_s = statistics.pstdev(scores) if len(scores) > 1 else 0.0
+        per_prompt.append({"mean": mean_s, "std": std_s, "rewards": scores})
+        stds.append(std_s)
+    return {
+        "per_prompt": per_prompt,
+        "mean_std": statistics.mean(stds) if stds else 0.0,
+        "min_std": min(stds) if stds else 0.0,
+        "max_std": max(stds) if stds else 0.0,
+    }
+
+
+# ---------- CLI ----------
+
+def _audit_cli(args) -> None:
+    """Score a JSONL of {complex, simple} (or {complex, output}) records."""
+    judge = None
+    if args.with_judge:
+        from verifier import LocalJudge
+        judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
+
+    records: list[dict] = []
+    with open(args.path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(json.loads(line))
+    if args.limit:
+        records = records[: args.limit]
+
+    output_field = args.output_field
+    rows: list[dict] = []
+    for rec in records:
+        out = rec.get(output_field) or rec.get("simple") or rec.get("output", "")
+        scores = audit_record(rec["complex"], out, judge=judge)
+        rows.append({"title": rec.get("title", ""), **scores})
+
+    if not rows:
+        print("no records")
+        return
+
+    keys = ["length", "vocab", "meaning", "combined"]
+    means = {k: sum(r[k] for r in rows) / len(rows) for k in keys}
+    print(f"\n=== REWARD AUDIT ({len(rows)} records) ===")
+    for k in keys:
+        print(f"  mean {k:>9}: {means[k]:.3f}")
+
+    if args.show_worst:
+        worst = sorted(rows, key=lambda r: r["combined"])[: args.show_worst]
+        print(f"\n=== {args.show_worst} WORST records by combined score ===")
+        for r in worst:
+            print(f"  {r['combined']:.3f}  L={r['length']:.2f} V={r['vocab']:.2f} M={r['meaning']:.2f}  {r['title']}")
+
+
+def main() -> None:
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    audit = sub.add_parser("audit", help="score per-component rewards on a JSONL")
+    audit.add_argument("path")
+    audit.add_argument("--with-judge", action="store_true")
+    audit.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1")
+    audit.add_argument("--judge-model", default="google/gemma-4-26b-a4b")
+    audit.add_argument("--output-field", default="simple",
+                       help="JSON field that holds the model output (simple|output|...)")
+    audit.add_argument("--limit", type=int, default=0)
+    audit.add_argument("--show-worst", type=int, default=5)
+
+    args = p.parse_args()
+    if args.cmd == "audit":
+        _audit_cli(args)
+
+
+if __name__ == "__main__":
+    main()
