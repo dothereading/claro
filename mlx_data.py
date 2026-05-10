@@ -143,6 +143,38 @@ def to_mlx_dpo_record(prompt: str, chosen: str, rejected: str) -> dict:
     }
 
 
+def to_mlx_grpo_record(complex_text: str, simple_text: str) -> dict:
+    """Format one record for mlx_lm_lora GRPO. The 'answer' field carries
+    the Opus reference simplification — not used by v1 rewards but
+    available for future ones (e.g. embedding-similarity vs reference)."""
+    return {
+        "prompt": complex_text.strip(),
+        "answer": simple_text.strip(),
+        "system": SFT_SYSTEM_PROMPT,
+    }
+
+
+def prepare_grpo_splits(
+    rows: list[dict],
+    eval_prompts: set[str],
+    valid_n: int,
+    seed: int = 0,
+) -> tuple[list[dict], list[dict]]:
+    """Filter eval prompts, hold out `valid_n` records, sort train by source
+    length ascending (curriculum: easier prompts first)."""
+    available = [r for r in rows if r["complex"] not in eval_prompts]
+    valid_keys = set(select_eval_keys([r["complex"] for r in available], n=valid_n, seed=seed))
+    train: list[dict] = []
+    valid: list[dict] = []
+    for r in available:
+        if r["complex"] in valid_keys:
+            valid.append(r)
+        else:
+            train.append(r)
+    train.sort(key=lambda r: len(r["complex"].split()))
+    return train, valid
+
+
 def split_train_valid(
     rows: list[dict], valid_frac: float, seed: int = 0
 ) -> tuple[list[dict], list[dict]]:
@@ -211,6 +243,24 @@ def _dpo_main(args: argparse.Namespace) -> None:
     )
 
 
+def _grpo_main(args: argparse.Namespace) -> None:
+    rows = _read_jsonl(Path(args.input))
+    eval_prompts = load_eval_prompts(Path(args.eval_path))
+    if eval_prompts:
+        print(f"excluding {len(eval_prompts)} eval prompts from {args.eval_path}")
+
+    train, valid = prepare_grpo_splits(rows, eval_prompts, args.valid_n, args.seed)
+    out_dir = Path(args.output_dir)
+    _write_split(
+        out_dir, "train",
+        [to_mlx_grpo_record(r["complex"], r["simple"]) for r in train],
+    )
+    _write_split(
+        out_dir, "valid",
+        [to_mlx_grpo_record(r["complex"], r["simple"]) for r in valid],
+    )
+
+
 def _carve_main(args: argparse.Namespace) -> None:
     out = Path(args.output)
     if out.exists() and not args.force:
@@ -244,6 +294,15 @@ def _build_parser() -> argparse.ArgumentParser:
     dpo.add_argument("--eval-path", default=str(DEFAULT_EVAL_PATH),
                      help="path to held-out eval JSONL whose prompts will be excluded from train/valid")
 
+    grpo = sub.add_parser("grpo", help="convert data/sft.jsonl → data/grpo/{train,valid}.jsonl")
+    grpo.add_argument("--input", default=str(REPO_ROOT / "data" / "sft.jsonl"))
+    grpo.add_argument("--output-dir", default=str(REPO_ROOT / "data" / "grpo"))
+    grpo.add_argument("--valid-n", type=int, default=30,
+                      help="number of records to hold out as the GRPO valid set (separate from data/eval.jsonl)")
+    grpo.add_argument("--seed", type=int, default=0)
+    grpo.add_argument("--eval-path", default=str(DEFAULT_EVAL_PATH),
+                      help="path to held-out eval JSONL whose prompts will be excluded entirely")
+
     carve = sub.add_parser("carve-eval",
                            help="freeze a held-out evaluation set (refuses to overwrite without --force)")
     carve.add_argument("--input", default=str(REPO_ROOT / "data" / "sft.jsonl"))
@@ -261,6 +320,8 @@ def main() -> None:
         _sft_main(args)
     elif args.cmd == "dpo":
         _dpo_main(args)
+    elif args.cmd == "grpo":
+        _grpo_main(args)
     elif args.cmd == "carve-eval":
         _carve_main(args)
 

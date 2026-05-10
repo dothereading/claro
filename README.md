@@ -7,16 +7,17 @@ Fine-tune a small Gemma model to rewrite complex English at **CEFR A2** (Element
 ```
 prompts.py        DISTILL_SYSTEM_PROMPT (long, for the teacher) and SFT_SYSTEM_PROMPT (short, baked into training)
 sources.py        Random Wikipedia paragraph fetcher
-distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo`
-mlx_data.py       Carve frozen eval set + convert generated JSONL into mlx-lm format
-train.py          Run mlx-lm / mlx-lm-lora training with W&B metric forwarding + adapter versioning
+distill.py        Teacher class wrapping OpenRouter; CLI subcommands `sft` and `dpo` (4-strategy diversified)
+mlx_data.py       Carve frozen eval set + convert generated JSONL into mlx-lm format (sft / dpo / grpo)
+train.py          Run mlx-lm / mlx-lm-lora training with W&B + adapter versioning (sft / dpo / grpo)
+rewards.py        GRPO reward components (length / vocab / meaning + repetition + difficulty stubs) with mlx-lm-lora @register_reward_function adapters
 inference.py      Shared model-load + chat-template + clean-generation primitives
 generate.py       Ad-hoc simplification CLI (text arg / --file / stdin)
 eval_harness.py   Run an adapter on the held-out eval set and report % A2 / too-easy / too-hard
 verifier.py       CEFR judge + reward tests (DifficultyRanking, PacingVariety, length_ratio)
 dataset_audit.py  Audit a JSONL of pairs; reports per-record flags + aggregate stats
 iterate.py        Single-paragraph qualitative prompt-iteration tool
-scripts/          Shell entrypoints for mlx-lm/mlx-lm-lora training, plus iterate_prompt.py
+scripts/          Shell entrypoints for mlx-lm/mlx-lm-lora training (sft / dpo / grpo) + iterate_prompt.py
 tests/            pytest suite (run with `uv run pytest`)
 data/             Generated datasets (gitignored)
 adapters/         Trained LoRA adapters (gitignored)
@@ -47,11 +48,15 @@ uv run python mlx_data.py carve-eval --n 30
 # 4. Convert to mlx-lm format
 uv run python mlx_data.py sft
 uv run python mlx_data.py dpo
+uv run python mlx_data.py grpo    # 134 train + 30 GRPO-valid (separate from eval)
 
-# 5. Train (from repo root). Both routes go through train.py, which forwards
+# 5. Train (from repo root). All three go through train.py, which forwards
 #    metrics to Weights & Biases live. Set WANDB_MODE=disabled to opt out.
 bash scripts/train_mlx.sh         # SFT
-bash scripts/train_dpo_mlx.sh     # DPO, resumes from SFT adapter
+bash scripts/train_dpo_mlx.sh     # DPO,  resumes from adapters/sft/latest
+bash scripts/train_grpo_mlx.sh    # GRPO, resumes from adapters/dpo/latest
+                                  # (set MEANING_JUDGE_URL=http://127.0.0.1:1234/v1
+                                  #  to enable the meaning reward via LM Studio)
 
 # 6. Evaluate against the frozen held-out set (requires LM Studio).
 uv run python eval_harness.py --adapter base                  # baseline

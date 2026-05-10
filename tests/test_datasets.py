@@ -203,6 +203,53 @@ class TestPrepareDpoSplits:
         assert "p2" not in prompts and "p5" not in prompts
 
 
+@pytest.mark.skipif(flavor == "old", reason="GRPO format only exists in new datasets module")
+class TestToMlxGrpoRecord:
+    def test_record_shape(self):
+        rec = mod.to_mlx_grpo_record("complex source", "opus reference")
+        # mlx_lm_lora GRPO expects {prompt, answer, system?}
+        assert "prompt" in rec
+        assert "answer" in rec
+        assert "system" in rec
+        assert rec["prompt"] == "complex source"
+        assert rec["answer"] == "opus reference"
+        assert isinstance(rec["system"], str) and rec["system"]
+
+
+@pytest.mark.skipif(flavor == "old", reason="GRPO valid carve only exists in new datasets module")
+class TestPrepareGrpoSplits:
+    def test_excludes_eval_prompts(self):
+        rows = [{"complex": f"p{i}", "simple": f"s{i}"} for i in range(20)]
+        train, valid = mod.prepare_grpo_splits(
+            rows, eval_prompts={"p3", "p7"}, valid_n=4, seed=0,
+        )
+        prompts = {r["complex"] for r in train + valid}
+        assert "p3" not in prompts and "p7" not in prompts
+        assert len(train) + len(valid) == 18
+
+    def test_holds_out_n_records_for_valid(self):
+        rows = [{"complex": f"p{i}", "simple": f"s{i}"} for i in range(50)]
+        train, valid = mod.prepare_grpo_splits(rows, eval_prompts=set(), valid_n=10, seed=0)
+        assert len(valid) == 10
+        assert len(train) == 40
+
+    def test_train_sorted_by_source_length_for_curriculum(self):
+        # train should be sorted ascending by source word count so easier
+        # (shorter) prompts come first during GRPO.
+        rows = [
+            {"complex": " ".join(["w"] * n), "simple": ""} for n in [50, 200, 100, 30, 150]
+        ]
+        train, _ = mod.prepare_grpo_splits(rows, eval_prompts=set(), valid_n=1, seed=0)
+        lengths = [len(r["complex"].split()) for r in train]
+        assert lengths == sorted(lengths)
+
+    def test_deterministic_with_seed(self):
+        rows = [{"complex": f"p{i}", "simple": ""} for i in range(40)]
+        a_train, a_valid = mod.prepare_grpo_splits(rows, eval_prompts=set(), valid_n=5, seed=42)
+        b_train, b_valid = mod.prepare_grpo_splits(rows, eval_prompts=set(), valid_n=5, seed=42)
+        assert {r["complex"] for r in a_valid} == {r["complex"] for r in b_valid}
+
+
 @pytest.mark.skipif(flavor == "old", reason="hash-based splits only exist in new datasets module")
 class TestSftDpoSplitConsistency:
     def test_same_prompt_lands_in_same_split(self):

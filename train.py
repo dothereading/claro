@@ -142,6 +142,92 @@ def parse_sft_line(line: str) -> Optional[dict]:
     return None
 
 
+class GrpoLogParser:
+    """Stateful parser for mlx_lm_lora's GRPO multi-line block format.
+
+    The GRPO trainer prints a `============= Iter N: ... =============`
+    block per logging step with metrics on subsequent lines. We track the
+    current iter from the header and emit `{iter, metric}` dicts as each
+    metric line is seen.
+    """
+
+    _HEADER_RE = re.compile(r"^Iter (\d+):\s*$")
+    _VAL_RE = re.compile(rf"^Iter (\d+): Val loss ({_NUM}),")
+    _LOSS_RE = re.compile(rf"^Loss:\s*({_NUM})")
+    _TOTAL_R_RE = re.compile(rf"^Total Rewards:\s*μ=({_NUM}),\s*σ=({_NUM})")
+    _GROUP_R_RE = re.compile(rf"^Group Rewards:\s*μ=({_NUM}),\s*σ=({_NUM})")
+    _KL_RE = re.compile(rf"^KL Divergence:\s*({_NUM})")
+    _AVG_TOKENS_RE = re.compile(rf"^\s*•\s*Avg tokens:\s*({_NUM})")
+    _LR_RE = re.compile(rf"^Learning Rate:\s*({_NUM})")
+    _SPEED_RE = re.compile(rf"^Speed:\s*({_NUM})\s*it/s,\s*({_NUM})\s*tok/s")
+    _MEM_RE = re.compile(rf"^Memory:\s*({_NUM})GB")
+    _PER_REWARD_RE = re.compile(
+        rf"^\s*•\s*([a-zA-Z_][a-zA-Z0-9_]*):\s*μ=({_NUM}),\s*σ=({_NUM}),\s*cov="
+    )
+
+    def __init__(self):
+        self.current_iter: Optional[int] = None
+
+    def __call__(self, line: str) -> Optional[dict]:
+        s = line.strip()
+        # Val line is self-contained — match before the bare-iter header.
+        m = self._VAL_RE.match(s)
+        if m:
+            return {"iter": int(m.group(1)), "valid/loss": float(m.group(2))}
+        m = self._HEADER_RE.match(s)
+        if m:
+            self.current_iter = int(m.group(1))
+            return None
+        if self.current_iter is None:
+            return None
+        # Metric-bearing lines, in order of frequency
+        m = self._LOSS_RE.match(s)
+        if m:
+            return {"iter": self.current_iter, "train/loss": float(m.group(1))}
+        m = self._TOTAL_R_RE.match(s)
+        if m:
+            return {
+                "iter": self.current_iter,
+                "train/reward_mean": float(m.group(1)),
+                "train/reward_std": float(m.group(2)),
+            }
+        m = self._GROUP_R_RE.match(s)
+        if m:
+            return {
+                "iter": self.current_iter,
+                "train/group_reward_mean": float(m.group(1)),
+                "train/group_reward_std": float(m.group(2)),
+            }
+        m = self._KL_RE.match(s)
+        if m:
+            return {"iter": self.current_iter, "train/kl": float(m.group(1))}
+        m = self._AVG_TOKENS_RE.match(s)
+        if m:
+            return {"iter": self.current_iter, "train/avg_tokens": float(m.group(1))}
+        m = self._LR_RE.match(s)
+        if m:
+            return {"iter": self.current_iter, "train/lr": float(m.group(1))}
+        m = self._SPEED_RE.match(s)
+        if m:
+            return {
+                "iter": self.current_iter,
+                "train/it_per_sec": float(m.group(1)),
+                "train/tok_per_sec": float(m.group(2)),
+            }
+        m = self._MEM_RE.match(s)
+        if m:
+            return {"iter": self.current_iter, "train/peak_mem_gb": float(m.group(1))}
+        m = self._PER_REWARD_RE.match(s)
+        if m:
+            name = m.group(1).replace("_reward_func", "").replace("_reward", "")
+            return {
+                "iter": self.current_iter,
+                f"train/reward_{name}_mean": float(m.group(2)),
+                f"train/reward_{name}_std": float(m.group(3)),
+            }
+        return None
+
+
 def parse_dpo_line(line: str) -> Optional[dict]:
     m = DPO_TRAIN_RE.search(line)
     if m:
@@ -389,6 +475,54 @@ def _dpo(args: argparse.Namespace) -> int:
     return result["exit_code"]
 
 
+def _grpo(args: argparse.Namespace) -> int:
+    adapter_dir, timestamp, sha = _resolve_adapter_dir(args, "grpo")
+    cmd = [
+        "uv", "run", "python", "-m", "mlx_lm_lora.train",
+        "--model", args.model,
+        "--train",
+        "--train-mode", "grpo",
+        "--data", args.data,
+        "--adapter-path", str(adapter_dir),
+        "--batch-size", str(args.batch_size),
+        "--num-layers", str(args.lora_layers),
+        "--iters", str(args.iters),
+        "--learning-rate", str(args.lr),
+        "--reward-functions", args.reward_functions,
+        "--reward-functions-file", args.reward_functions_file,
+        "--reward-weights", args.reward_weights,
+        "--group-size", str(args.group_size),
+        "--temperature", str(args.temperature),
+        "--max-completion-length", str(args.max_completion_length),
+        "--val-batches", str(args.val_batches),
+        "--steps-per-eval", str(args.steps_per_eval),
+        "--steps-per-report", str(args.steps_per_report),
+        "--grad-checkpoint",
+    ]
+    if args.resume_adapter and Path(args.resume_adapter).exists():
+        cmd.extend(["--resume-adapter-file", args.resume_adapter])
+        print(f"[train] resuming from {args.resume_adapter}", flush=True)
+    config = {
+        "stage": "grpo", "model": args.model, "data": args.data,
+        "iters": args.iters, "lr": args.lr,
+        "batch_size": args.batch_size, "lora_layers": args.lora_layers,
+        "group_size": args.group_size, "temperature": args.temperature,
+        "max_completion_length": args.max_completion_length,
+        "reward_functions": args.reward_functions,
+        "reward_weights": args.reward_weights,
+        "dataset_hash": dataset_hash(Path(args.data)),
+        "resume_from": args.resume_adapter,
+        "adapter_dir": str(adapter_dir),
+    }
+    name = build_run_name("grpo", args.model, config)
+    result = run_with_logging(
+        cmd, GrpoLogParser(), project=args.project, run_name=name,
+        config=config, tags=["grpo", "mlx-lm-lora"],
+    )
+    _finalize("grpo", adapter_dir, result, config, cmd, timestamp)
+    return result["exit_code"]
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -423,6 +557,31 @@ def _build_parser() -> argparse.ArgumentParser:
     dpo.add_argument("--steps-per-eval", type=int, default=50)
     dpo.add_argument("--steps-per-report", type=int, default=10)
     dpo.add_argument("--project", default="lang-simp-dpo")
+
+    grpo = sub.add_parser("grpo", help="GRPO via mlx-lm-lora with W&B logging")
+    grpo.add_argument("--model", default="mlx-community/gemma-3-1b-it-bf16")
+    grpo.add_argument("--data", default="data/grpo")
+    grpo.add_argument("--adapter-path", default=None,
+                      help="explicit adapter dir; default = adapters/grpo/<timestamp>-<sha>/ + latest symlink")
+    grpo.add_argument("--resume-adapter", default="adapters/dpo/latest/adapters.safetensors",
+                      help="resume from this adapter file (silently ignored if missing)")
+    grpo.add_argument("--reward-functions", default="length_reward,vocab_reward,meaning_reward")
+    grpo.add_argument("--reward-functions-file", default=str(REPO_ROOT / "rewards.py"))
+    grpo.add_argument("--reward-weights", default="[0.25,0.25,0.50]",
+                      help="JSON list, must match the order/length of --reward-functions")
+    grpo.add_argument("--group-size", type=int, default=2,
+                      help="rollouts per prompt; G=2 cheaper than G=4, sufficient for many problems")
+    grpo.add_argument("--temperature", type=float, default=0.8,
+                      help="rollout sampling temperature; higher = more reward variety per group")
+    grpo.add_argument("--max-completion-length", type=int, default=512)
+    grpo.add_argument("--iters", type=int, default=200)
+    grpo.add_argument("--batch-size", type=int, default=1)
+    grpo.add_argument("--lr", type=float, default=1e-6)
+    grpo.add_argument("--lora-layers", type=int, default=16)
+    grpo.add_argument("--val-batches", type=int, default=5)
+    grpo.add_argument("--steps-per-eval", type=int, default=50)
+    grpo.add_argument("--steps-per-report", type=int, default=10)
+    grpo.add_argument("--project", default="lang-simp-grpo")
     return p
 
 
@@ -432,6 +591,8 @@ def main() -> int:
         return _sft(args)
     if args.cmd == "dpo":
         return _dpo(args)
+    if args.cmd == "grpo":
+        return _grpo(args)
     return 1
 
 

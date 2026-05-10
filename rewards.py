@@ -236,38 +236,64 @@ class CombinedReward(RewardComponent):
 
 # ---------- mlx_lm_lora @register_reward_function adapters ----------
 #
-# Defined as plain functions matching the (prompts, completions, **kwargs)
-# signature the framework calls. Each wraps the corresponding
-# RewardComponent with a per-record loop so we always return one float
-# per (prompt, completion) pair. The wrappers will be activated by the
-# `--reward-functions-file rewards.py` flag in `train.py grpo`.
-#
-# The actual @register_reward_function decorator is added in train.py
-# import context to keep this module importable without mlx_lm_lora.
+# mlx_lm_lora calls reward functions with the signature
+#   (prompts: list[str], completions: list[str], answers: list[str],
+#    types: list[str] | None) -> list[float]
+# Returning one float in [0, 1] per (prompt, completion). The framework
+# picks them up by name via --reward-functions and --reward-functions-file.
 
 _LENGTH = LengthVsSourceReward()
 _VOCAB = VocabSimplicityReward()
 _MEANING = SemanticPreservationReward()
 
 
-def length_reward_fn(prompts, completions, **_) -> list[float]:
+def _get_judge():
+    """Lazy-load LocalJudge from env. None if MEANING_JUDGE_URL not set,
+    in which case meaning reward returns its 0.5 fallback (constant
+    contribution to combined → no signal but no crash)."""
+    import os
+    url = os.environ.get("MEANING_JUDGE_URL")
+    if not url:
+        return None
+    if not hasattr(_get_judge, "_cached"):
+        from verifier import LocalJudge
+        model = os.environ.get("MEANING_JUDGE_MODEL", "google/gemma-4-26b-a4b")
+        _get_judge._cached = LocalJudge(base_url=url, model_name=model)
+    return _get_judge._cached
+
+
+try:
+    from mlx_lm_lora.trainer.grpo_reward_functions import register_reward_function
+except ImportError:
+    # Tests don't need mlx_lm_lora — fall back to a no-op decorator so
+    # this module is still importable.
+    def register_reward_function(name=None):
+        def deco(fn): return fn
+        return deco
+
+
+@register_reward_function()
+def length_reward(prompts, completions, answers, types=None) -> list[float]:
     return [
-        _LENGTH.compute(c, RewardContext(source=p))
-        for p, c in zip(prompts, completions)
+        _LENGTH.compute(c, RewardContext(source=p, answer=a))
+        for p, c, a in zip(prompts, completions, answers)
     ]
 
 
-def vocab_reward_fn(prompts, completions, **_) -> list[float]:
+@register_reward_function()
+def vocab_reward(prompts, completions, answers, types=None) -> list[float]:
     return [
-        _VOCAB.compute(c, RewardContext(source=p))
-        for p, c in zip(prompts, completions)
+        _VOCAB.compute(c, RewardContext(source=p, answer=a))
+        for p, c, a in zip(prompts, completions, answers)
     ]
 
 
-def meaning_reward_fn(prompts, completions, judge=None, **_) -> list[float]:
+@register_reward_function()
+def meaning_reward(prompts, completions, answers, types=None) -> list[float]:
+    judge = _get_judge()
     return [
-        _MEANING.compute(c, RewardContext(source=p), judge=judge)
-        for p, c in zip(prompts, completions)
+        _MEANING.compute(c, RewardContext(source=p, answer=a), judge=judge)
+        for p, c, a in zip(prompts, completions, answers)
     ]
 
 

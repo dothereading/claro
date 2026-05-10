@@ -78,6 +78,86 @@ class TestParseDpoLine:
         assert train.parse_dpo_line("") is None
 
 
+class TestParseGrpoLine:
+    """GRPO logs in multi-line blocks. The parser is stateful — `Iter N:`
+    sets the current iter, subsequent metric lines emit values keyed to that
+    iter."""
+
+    def setup_method(self):
+        self.p = train.GrpoLogParser()
+
+    def test_iter_header_alone_emits_nothing(self):
+        assert self.p("Iter 100:") is None
+        assert self.p("Iter 100:\n") is None
+
+    def test_loss_after_header(self):
+        self.p("Iter 100:")
+        out = self.p("Loss: 0.234")
+        assert out == {"iter": 100, "train/loss": 0.234}
+
+    def test_total_rewards_line(self):
+        self.p("Iter 50:")
+        out = self.p("Total Rewards:  μ=0.612, σ=0.143")
+        assert out == {
+            "iter": 50,
+            "train/reward_mean": 0.612,
+            "train/reward_std": 0.143,
+        }
+
+    def test_group_rewards_line(self):
+        self.p("Iter 50:")
+        out = self.p("Group Rewards:  μ=0.500, σ=0.092")
+        assert out == {
+            "iter": 50,
+            "train/group_reward_mean": 0.500,
+            "train/group_reward_std": 0.092,
+        }
+
+    def test_kl_divergence(self):
+        self.p("Iter 50:")
+        out = self.p("KL Divergence: 0.000004567890")
+        assert out == {"iter": 50, "train/kl": 0.000004567890}
+
+    def test_avg_tokens(self):
+        self.p("Iter 50:")
+        out = self.p("  • Avg tokens: 84.3")
+        assert out == {"iter": 50, "train/avg_tokens": 84.3}
+
+    def test_individual_reward_function(self):
+        self.p("Iter 50:")
+        out = self.p("  • length: μ=0.910, σ=0.045, cov=92.50%")
+        assert out == {
+            "iter": 50,
+            "train/reward_length_mean": 0.910,
+            "train/reward_length_std": 0.045,
+        }
+
+    def test_learning_rate(self):
+        self.p("Iter 50:")
+        out = self.p("Learning Rate: 1.0000e-06")
+        assert out == {"iter": 50, "train/lr": 1.0e-06}
+
+    def test_speed(self):
+        self.p("Iter 50:")
+        out = self.p("Speed: 0.345 it/s, 1234.5 tok/s")
+        assert out == {"iter": 50, "train/it_per_sec": 0.345, "train/tok_per_sec": 1234.5}
+
+    def test_memory(self):
+        self.p("Iter 50:")
+        out = self.p("Memory: 4.987GB")
+        assert out == {"iter": 50, "train/peak_mem_gb": 4.987}
+
+    def test_val_loss_single_line(self):
+        # Val line is single-line; parser handles it without needing prior Iter:
+        out = self.p("Iter 50: Val loss 0.123, Val took 1.234s")
+        assert out == {"iter": 50, "valid/loss": 0.123}
+
+    def test_unrelated_line_returns_none(self):
+        assert self.p("================================================================================") is None
+        assert self.p("") is None
+        assert self.p("Generation Stats:") is None
+
+
 class TestGitShortSha:
     def test_returns_string_when_in_git_repo(self):
         # We're running pytest from the repo root, so this should always work

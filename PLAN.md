@@ -22,13 +22,13 @@ Fine-tune a small Gemma model to perform language simplification, transforming c
 *   **Status:** trained 300 iters; train loss 0.2–0.5, val loss climbing 1.9 → 2.4 → likely overfitting on 90 train rows. Re-run after dataset grows.
 *   **Note:** `mlx_data.py sft` now defaults to using *all* rows; the existing adapter was trained on a 100-row subset. To reproduce: pass `--n 100`.
 
-### Phase 3: Reinforcement Learning (GRPO) — *backlog*
-GRPO loop and reward components are not yet implemented; tracked in the task list. The CEFR-difficulty judge in `verifier.py` will be reward D when this lands.
-
-1.  **Reward A: Length Constraint** — penalty for sentences > 10 words, monotonically increasing.
-2.  **Reward B: Vocabulary Simplicity** — penalty when more than 1–2 uncommon words appear in a sentence (frequency-list based).
-3.  **Reward C: Semantic Preservation** — independent judge compares source vs. simplification for info loss / hallucination.
-4.  **Reward D: Difficulty Ranking** — LM judge labels output as A1 / A2 / B1; reward rewards A2. Implemented in `verifier.DifficultyRankingTest`.
+### Phase 3: Reinforcement Learning (GRPO)
+*   [x] **GRPO data prep** (`mlx_data.py grpo`): emits `data/grpo/{train,valid}.jsonl` in mlx-lm-lora's `{prompt, answer, system}` shape; excludes eval prompts; holds out 30 records as a *GRPO valid set* (separate from `data/eval.jsonl`); curriculum-sorts train ascending by source length.
+*   [x] **Reward components** (`rewards.py`): all four planned, plus a stub for repetition. v1 active = `LengthVsSourceReward` (output/source ratio in [0.8, 1.3]) + `VocabSimplicityReward` (top-2000 wordfreq, proper-noun-aware) + `SemanticPreservationReward` (judge call: facts_preserved + no_hallucinations on 1–5 scale). `RepetitionReward` and `SmoothDifficultyReward` are stubbed; activate later. `CombinedReward` does weighted sum (0.5 meaning / 0.25 length / 0.25 vocab) with a *meaning gate*: if meaning < 0.5 the whole reward zeros out.
+*   [x] **GRPO training** (`train.py grpo` + `scripts/train_grpo_mlx.sh`): wraps `mlx_lm_lora.train --train-mode grpo`, with G=2, temp=0.8, lr=1e-6, max_completion=512. Resumes from `adapters/dpo/latest`. W&B parser captures train/loss, train/reward_mean, train/reward_std, train/group_reward_std, train/kl, plus per-component reward μ/σ. Adapter versioned to `adapters/grpo/<timestamp>-<sha>/` with meta.json.
+*   [x] **Reward sanity tools**: `python rewards.py audit <jsonl>` scores any dataset with all rewards; `compute_variety()` computes per-group reward std (the GRPO advantage signal).
+*   [ ] Run a small smoke train (~20 iters) to verify the loop end-to-end with real subprocess buffering.
+*   [ ] Run real GRPO training and eval against the held-out set.
 
 ### Phase 4: Preference Alignment (DPO)
 *   **Engine:** mlx-lm-lora (`scripts/train_dpo_mlx.sh`), resumes from the SFT adapter.
