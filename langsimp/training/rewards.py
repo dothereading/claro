@@ -37,6 +37,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 
 from wordfreq import top_n_list
 
@@ -175,30 +176,74 @@ class VocabSimplicityReward(RewardComponent):
 
 # ---------- Combined judge bundle (meaning + difficulty in one call) ----------
 #
-# Benchmarked against the independent-call alternative (3 quality tiers × 3
-# runs, anthropic/claude-haiku-4-5): one combined call is 2.1× faster
-# (0.97s vs 2.04s), saves 22% completion tokens, 27% prompt tokens. Meaning
-# scores agree perfectly; CEFR-level classifications shift one notch harder
-# but stay self-consistent (the GRPO advantage signal cares about
-# discrimination, not absolute level).
+# Two iterations of benchmarking, both 3 quality tiers × 3 runs against
+# anthropic/claude-haiku-4-5:
 #
-# Field names are 1-char to keep decode tokens down (the dominant cost on
-# hosted APIs).
+#   round 1 (no CEFR anchors): combined is 2.1× faster than two independent
+#     calls (0.97s vs 2.04s), 22% fewer completion tokens, 27% fewer prompt
+#     tokens. Meaning scores agree 18/18, but CEFR levels disagree 0/9 in a
+#     systematic way (combined rates everything one notch harder).
+#
+#   round 2 (with A1/A2/B1 anchors from samples.jsonl, the same set the
+#     verifier already uses for CEFR classification): combined still wins
+#     on latency (1.16s vs 1.92s, ~1.65×) and decode (28 vs 36 tokens).
+#     Anchors lift CEFR agreement from 0/9 to 6/9. Spot-check on 6 random
+#     real Opus simplifications confirms the anchored judge classifies
+#     5/6 as A2 (the LEVEL_SCORES apex) — anchors keep the reward signal
+#     pointed in the right direction.
+#
+# Field names are 1-char to keep decode cheap on hosted APIs.
 
-_JUDGE_PROMPT_TEMPLATE = """Rate this simplification on three axes.
+# CEFR few-shot anchors. Loaded once at import; the file is small and
+# read-only here. Three explicit fields rather than a dict so the template
+# substitution stays readable.
+_SAMPLES_PATH = Path(__file__).resolve().parents[2] / "samples.jsonl"
+
+
+def _load_cefr_anchor(level: str) -> str:
+    """First sample matching `level` from samples.jsonl. Raises if the
+    file is missing or the level has no sample — the judge prompt assumes
+    these exist."""
+    with open(_SAMPLES_PATH) as f:
+        for line in f:
+            r = json.loads(line)
+            if r["level"] == level:
+                return r["text"]
+    raise KeyError(f"no {level} sample in {_SAMPLES_PATH}")
+
+
+_A1_ANCHOR = _load_cefr_anchor("A1")
+_A2_ANCHOR = _load_cefr_anchor("A2")
+_B1_ANCHOR = _load_cefr_anchor("B1")
+
+
+_JUDGE_PROMPT_TEMPLATE = f"""Rate this simplification on three axes.
 
 f (facts kept): 5 = all key facts present; 1 = most key facts dropped. Dropping decorative detail is fine.
 h (no hallucinations): 5 = nothing invented; 1 = many invented facts.
-lvl (CEFR level of the simplification): A1 (very easy), A2 (elementary, ~1500 vocab, short sentences), B1 (intermediate), B2+ (upper-intermediate or harder).
+lvl (CEFR level of the simplification — calibrate against the reference texts below).
+
+Reference CEFR levels:
+
+A1 example:
+{_A1_ANCHOR}
+
+A2 example:
+{_A2_ANCHOR}
+
+B1 example:
+{_B1_ANCHOR}
+
+B2+ is any text noticeably harder than the B1 example above.
 
 SOURCE:
-{source}
+{{source}}
 
-SIMPLIFICATION:
-{output}
+SIMPLIFICATION TO RATE:
+{{output}}
 
 Respond with ONLY this JSON, no prose, no markdown:
-{{"f": int, "h": int, "lvl": "A1"|"A2"|"B1"|"B2+"}}"""
+{{{{"f": int, "h": int, "lvl": "A1"|"A2"|"B1"|"B2+"}}}}"""
 
 # Shared per-rollout cache so meaning + difficulty rewards split one judge
 # call. Bounded to ~1024 entries (FIFO eviction) since GRPO will see many
