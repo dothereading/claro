@@ -1,9 +1,9 @@
 """Tests for the GRPO reward components.
 
 Pure-Python rewards (length, vocab, repetition) are exercised end-to-end.
-The judge-based meaning reward uses a stub. Stubs (repetition, difficulty)
-are required to exist and return floats so the wiring works, but assert
-nothing about their numeric value yet.
+Judge-backed rewards (meaning, difficulty) use a StubJudge that returns a
+preset dict; the shared `_judge_bundle` cache is verified in
+TestJudgeBundleCache so meaning + difficulty don't double-bill the API.
 """
 
 from __future__ import annotations
@@ -182,6 +182,14 @@ class TestVocabSimplicityCalibration:
 
 
 class TestSemanticPreservationReward:
+    """Meaning reward reads `f` (facts) and `h` (no-hallucinations) from
+    the combined judge bundle. Same per-rollout judge call also produces
+    `lvl` which SmoothDifficultyReward consumes — see TestJudgeBundleCache."""
+
+    def setup_method(self):
+        # Clear the shared judge cache between tests to avoid cross-pollution.
+        rewards._judge_cache.clear()
+
     def _ctx(self, source: str):
         return rewards.RewardContext(source=source)
 
@@ -189,58 +197,177 @@ class TestSemanticPreservationReward:
         return rewards.SemanticPreservationReward()
 
     def test_full_reward_when_judge_says_perfect(self):
-        judge = StubJudge({"facts_preserved": 5, "no_hallucinations": 5})
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
         s = self._r().compute("output", self._ctx("source"), judge=judge)
         assert s == pytest.approx(1.0)
 
     def test_zero_reward_when_judge_says_terrible(self):
-        judge = StubJudge({"facts_preserved": 1, "no_hallucinations": 1})
+        judge = StubJudge({"f": 1, "h": 1, "lvl": "B2+"})
         s = self._r().compute("output", self._ctx("source"), judge=judge)
-        # 1/5 average → (1/5 + 1/5) / 2 = 0.2; or whichever shape we pick
         assert 0.0 <= s <= 0.3
 
-    def test_hallucinations_hurt_more_than_omissions(self):
-        # Same facts_preserved, different no_hallucinations
-        omitted = StubJudge({"facts_preserved": 3, "no_hallucinations": 5})
-        hallucinated = StubJudge({"facts_preserved": 5, "no_hallucinations": 3})
-        # We want the reward to weight hallucination at least as much as omission.
-        s_omit = self._r().compute("o", self._ctx("s"), judge=omitted)
-        s_hall = self._r().compute("o", self._ctx("s"), judge=hallucinated)
-        # At minimum, neither should be 1.0 and both should be in (0, 1)
+    def test_partial_when_one_axis_low(self):
+        omitted = StubJudge({"f": 3, "h": 5, "lvl": "A2"})
+        hallucinated = StubJudge({"f": 5, "h": 3, "lvl": "A2"})
+        s_omit = self._r().compute("o", self._ctx("s1"), judge=omitted)
+        s_hall = self._r().compute("o", self._ctx("s2"), judge=hallucinated)
         assert 0.0 < s_omit < 1.0 and 0.0 < s_hall < 1.0
 
     def test_judge_prompt_includes_both_source_and_output(self):
-        judge = StubJudge({"facts_preserved": 4, "no_hallucinations": 4})
+        judge = StubJudge({"f": 4, "h": 4, "lvl": "A2"})
         self._r().compute("THE_OUTPUT_TEXT", self._ctx("THE_SOURCE_TEXT"), judge=judge)
         prompt = judge.calls[0]
         assert "THE_SOURCE_TEXT" in prompt
         assert "THE_OUTPUT_TEXT" in prompt
 
     def test_handles_judge_failure_gracefully(self):
-        # If judge returns garbage, return a sentinel low score, not crash
         judge = StubJudge({"unknown_key": "x"})
         s = self._r().compute("o", self._ctx("s"), judge=judge)
         assert 0.0 <= s <= 1.0
 
 
+class TestSmoothDifficultyReward:
+    """CEFR-level → smooth score: A2 is the target (1.0), drift in either
+    direction costs reward. A1 is over-simplified (0.6 — not catastrophic);
+    B1+ is under-simplified (0.4 → 0.0)."""
+
+    def setup_method(self):
+        rewards._judge_cache.clear()
+
+    def _ctx(self, source: str = "src"):
+        return rewards.RewardContext(source=source)
+
+    def _r(self):
+        return rewards.SmoothDifficultyReward()
+
+    def test_a2_target_scores_one(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        assert self._r().compute("o", self._ctx(), judge=judge) == pytest.approx(1.0)
+
+    def test_a1_over_simplified_scores_partial(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A1"})
+        s = self._r().compute("o", self._ctx(), judge=judge)
+        assert 0.4 < s < 0.8
+
+    def test_b1_under_simplified_scores_low(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "B1"})
+        s = self._r().compute("o", self._ctx(), judge=judge)
+        assert 0.2 < s < 0.5
+
+    def test_b2plus_scores_zero(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "B2+"})
+        s = self._r().compute("o", self._ctx(), judge=judge)
+        assert s <= 0.1
+
+    def test_no_judge_returns_neutral(self):
+        # When no judge configured, contribute a constant mid-score (no
+        # signal but no crash), matching the meaning-reward fallback pattern.
+        assert self._r().compute("o", self._ctx(), judge=None) == 0.5
+
+    def test_unrecognized_level_returns_neutral(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "QQQ"})
+        s = self._r().compute("o", self._ctx(), judge=judge)
+        assert s == 0.5
+
+    def test_a2_ordering(self):
+        # Monotonicity check: B2+ ≤ B1 ≤ A1 < A2; A2 is the apex.
+        def s(level):
+            return self._r().compute(
+                "o", self._ctx(level), judge=StubJudge({"f": 5, "h": 5, "lvl": level})
+            )
+
+        assert s("A2") > s("A1") > s("B1") >= s("B2+")
+
+
+class TestJudgeBundleCache:
+    """Meaning + difficulty rewards must share a single judge call per
+    (source, output) pair — saves a round trip on every rollout during
+    training."""
+
+    def setup_method(self):
+        rewards._judge_cache.clear()
+
+    def test_second_reward_hits_cache(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        ctx = rewards.RewardContext(source="src")
+        rewards.SemanticPreservationReward().compute("out", ctx, judge=judge)
+        rewards.SmoothDifficultyReward().compute("out", ctx, judge=judge)
+        # One judge call serves both rewards.
+        assert len(judge.calls) == 1, f"expected 1 judge call, got {len(judge.calls)}"
+
+    def test_different_outputs_each_call_judge(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        ctx = rewards.RewardContext(source="src")
+        rewards.SemanticPreservationReward().compute("out_A", ctx, judge=judge)
+        rewards.SemanticPreservationReward().compute("out_B", ctx, judge=judge)
+        # Different completions → no cache reuse → two calls.
+        assert len(judge.calls) == 2
+
+
 # ---------- Stubs (must exist; numeric behavior is TBD) ----------
 
 
-class TestRepetitionRewardStub:
-    def test_class_exists_and_returns_float(self):
+class TestRepetitionReward:
+    """Catches the GRPO failure mode seen in the smoke run: policy degenerates
+    into 4-gram loops that max out the completion budget. Without this signal
+    length/vocab can stay artificially high on degenerate outputs.
+
+    Targets (calibrated against good A2 prose vs synthetic loops):
+      * normal A2 prose          → ≥ 0.85
+      * 4-gram loop ("of the …") → ≤ 0.20
+      * repeated whole sentence  → ≤ 0.30
+      * very short text          → 1.0  (can't penalize what we can't measure)
+    """
+
+    NORMAL_A2 = (
+        "Washington is a city in the United States. "
+        "It is the capital of the country. "
+        "It is on the east coast, between Virginia and Maryland. "
+        "Many people work for the government there."
+    )
+
+    LOOP_4GRAM = (
+        "The president of the country of the country of the country of the "
+        "country of the country of the country of the country of the country "
+        "of the country of the country of the country of the country."
+    )
+
+    REPEATED_SENTENCE = (
+        "Cats sleep all day. Cats sleep all day. Cats sleep all day. "
+        "Cats sleep all day. Cats sleep all day."
+    )
+
+    def test_normal_a2_scores_high(self):
         r = rewards.RepetitionReward()
-        out = r.compute("any text", rewards.RewardContext(source="src"))
-        assert isinstance(out, float)
-        assert 0.0 <= out <= 1.0
+        s = r.compute(self.NORMAL_A2, rewards.RewardContext(source="x"))
+        assert s >= 0.85, f"normal A2 scored {s:.3f}"
 
+    def test_4gram_loop_scores_low(self):
+        r = rewards.RepetitionReward()
+        s = r.compute(self.LOOP_4GRAM, rewards.RewardContext(source="x"))
+        assert s <= 0.20, f"4-gram loop scored {s:.3f}"
 
-class TestSmoothDifficultyRewardStub:
-    def test_class_exists_and_returns_float(self):
-        # No judge needed since stub doesn't actually call one yet
-        r = rewards.SmoothDifficultyReward(a1_samples=[], a2_samples=[], b1_samples=[])
-        out = r.compute("any text", rewards.RewardContext(source="src"), judge=None)
-        assert isinstance(out, float)
-        assert 0.0 <= out <= 1.0
+    def test_repeated_sentence_scores_low(self):
+        r = rewards.RepetitionReward()
+        s = r.compute(self.REPEATED_SENTENCE, rewards.RewardContext(source="x"))
+        assert s <= 0.30, f"repeated sentence scored {s:.3f}"
+
+    def test_short_text_returns_one(self):
+        # Too few tokens to measure repetition meaningfully; return 1.0
+        # rather than incidentally penalize short outputs.
+        r = rewards.RepetitionReward()
+        s = r.compute("Hello world.", rewards.RewardContext(source="x"))
+        assert s == 1.0
+
+    def test_empty_text_returns_one(self):
+        r = rewards.RepetitionReward()
+        assert r.compute("", rewards.RewardContext(source="x")) == 1.0
+
+    def test_score_in_unit_interval(self):
+        r = rewards.RepetitionReward()
+        for text in (self.NORMAL_A2, self.LOOP_4GRAM, self.REPEATED_SENTENCE):
+            s = r.compute(text, rewards.RewardContext(source="x"))
+            assert 0.0 <= s <= 1.0
 
 
 # ---------- CombinedReward ----------
@@ -344,7 +471,7 @@ class TestAuditRecord:
             assert 0.0 <= v <= 1.0
 
     def test_meaning_uses_judge_when_given(self):
-        judge = StubJudge({"facts_preserved": 5, "no_hallucinations": 5})
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
         out = rewards.audit_record("source text", "output text", judge=judge)
         assert out["meaning"] == pytest.approx(1.0)
         # Without judge it falls back to mid score
@@ -423,7 +550,7 @@ class TestGetJudgeFactory:
         j = rewards._get_judge()
         assert j is not None
         assert j.api_key == "sk-or-test"
-        assert j.model == "anthropic/claude-haiku-latest"
+        assert j.model == "anthropic/claude-haiku-4-5"
         assert "openrouter.ai" in j.endpoint
 
     def test_openrouter_backend_without_key_raises(self, monkeypatch):

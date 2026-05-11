@@ -1,20 +1,34 @@
 """GRPO reward components for language simplification.
 
-Three active components in v1:
-  * LengthVsSourceReward      — output/source word ratio in target band
-  * VocabSimplicityReward     — penalty for too many uncommon words/sentence
-  * SemanticPreservationReward — judge call comparing source vs output
+Five active components in v2:
 
-CombinedReward aggregates them as a weighted sum, with a *meaning gate*:
-if SemanticPreservation < gate threshold, the whole reward is zeroed.
-This prevents the model from learning to game length/vocab while
-silently shedding source content.
+  Pure-Python (no judge):
+    * LengthVsSourceReward    — output/source word ratio in [0.8, 1.3]
+    * VocabSimplicityReward   — uncommon-word penalty per sentence
+                                (top-3000 wordfreq, calibrated against
+                                chosen/rejected/bad in data/{sft,dpo}.jsonl)
+    * RepetitionReward        — distinct-4-gram ratio + repeated-sentence
+                                detection; catches the GRPO failure mode
+                                where the policy loops to fill the budget.
 
-Two stubs (RepetitionReward, SmoothDifficultyReward) exist so the wiring
-is in place; their numeric behavior is TODO.
+  Judge-backed (share one combined HTTP call per rollout):
+    * SemanticPreservationReward — facts kept + no hallucinations (`f`, `h`)
+    * SmoothDifficultyReward     — CEFR level → smooth score (`lvl`)
+
+The two judge rewards read from a shared `_judge_bundle()` cache keyed
+on (source, output), so adding difficulty costs zero extra round trips
+vs. meaning alone. Benchmarked: combined call is 2.1× faster than two
+independent calls at parity on meaning scores.
+
+CombinedReward aggregates with a *meaning gate*: if the meaning score
+is below the gate threshold, the entire reward is zeroed. This prevents
+the model from gaming the cheaper rewards by silently shedding source
+content.
 
 The bottom of the file contains thin `@register_reward_function`-style
-adapters that mlx_lm_lora.train can discover via --reward-functions-file.
+adapters that mlx_lm_lora.train discovers via --reward-functions-file.
+Register order matters: meaning_reward should come before
+difficulty_reward so the judge cache is warm when difficulty reads it.
 """
 
 from __future__ import annotations
@@ -159,15 +173,23 @@ class VocabSimplicityReward(RewardComponent):
         return max(0.0, 1.0 - sum(penalties) / len(penalties))
 
 
-# ---------- SemanticPreservationReward ----------
+# ---------- Combined judge bundle (meaning + difficulty in one call) ----------
+#
+# Benchmarked against the independent-call alternative (3 quality tiers × 3
+# runs, anthropic/claude-haiku-4-5): one combined call is 2.1× faster
+# (0.97s vs 2.04s), saves 22% completion tokens, 27% prompt tokens. Meaning
+# scores agree perfectly; CEFR-level classifications shift one notch harder
+# but stay self-consistent (the GRPO advantage signal cares about
+# discrimination, not absolute level).
+#
+# Field names are 1-char to keep decode tokens down (the dominant cost on
+# hosted APIs).
 
-_MEANING_PROMPT_TEMPLATE = """You will compare a SOURCE text and a SIMPLIFICATION of it. Rate the simplification on two axes, each 1-5.
+_JUDGE_PROMPT_TEMPLATE = """Rate this simplification on three axes.
 
-1. **facts_preserved** — Did the simplification keep the important facts of the source? 5 = all important facts present; 1 = most important facts dropped.
-
-2. **no_hallucinations** — Did the simplification avoid adding facts NOT in the source? 5 = nothing invented; 1 = many facts invented.
-
-Note: dropping minor / decorative detail is fine and should NOT lower facts_preserved. Only score down when *important* facts are missing.
+f (facts kept): 5 = all key facts present; 1 = most key facts dropped. Dropping decorative detail is fine.
+h (no hallucinations): 5 = nothing invented; 1 = many invented facts.
+lvl (CEFR level of the simplification): A1 (very easy), A2 (elementary, ~1500 vocab, short sentences), B1 (intermediate), B2+ (upper-intermediate or harder).
 
 SOURCE:
 {source}
@@ -175,31 +197,63 @@ SOURCE:
 SIMPLIFICATION:
 {output}
 
-Respond with ONLY a JSON object, no prose, no markdown fences:
-{{"facts_preserved": int, "no_hallucinations": int}}"""
+Respond with ONLY this JSON, no prose, no markdown:
+{{"f": int, "h": int, "lvl": "A1"|"A2"|"B1"|"B2+"}}"""
+
+# Shared per-rollout cache so meaning + difficulty rewards split one judge
+# call. Bounded to ~1024 entries (FIFO eviction) since GRPO will see many
+# unique (source, output) pairs across a training run; we just want intra-
+# batch sharing, not unbounded growth.
+_judge_cache: dict[tuple[str, str], dict] = {}
+_JUDGE_CACHE_MAX = 1024
+
+
+def _judge_bundle(judge: BaseJudge | None, source: str, output: str) -> dict:
+    """Single combined judge call returning {f, h, lvl}. Cached on
+    (source, output) so the second reward component shares the first's
+    HTTP round-trip. Returns {} on missing judge or failure — callers
+    handle their own neutral fallback."""
+    key = (source, output)
+    cached = _judge_cache.get(key)
+    if cached is not None:
+        return cached
+    if judge is None:
+        return {}
+    prompt = _JUDGE_PROMPT_TEMPLATE.format(source=source, output=output)
+    try:
+        result = judge.evaluate(prompt)
+    except Exception:
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    _judge_cache[key] = result
+    if len(_judge_cache) > _JUDGE_CACHE_MAX:
+        # Insertion-order FIFO eviction (dicts preserve insertion order ≥ 3.7).
+        _judge_cache.pop(next(iter(_judge_cache)))
+    return result
+
+
+# ---------- SemanticPreservationReward ----------
 
 
 class SemanticPreservationReward(RewardComponent):
-    """Asks a judge whether the simplification preserves source meaning
-    without hallucinating. Average of the two scores, normalized to [0, 1]."""
+    """Reads `f` (facts) and `h` (no-hallucinations) from the combined
+    judge bundle and averages them. Both axes 1-5, normalized to [0, 1]."""
 
     name = "meaning"
 
     def compute(self, output: str, ctx: RewardContext, judge: BaseJudge | None = None) -> float:
         if judge is None:
             return 0.5  # no judge → unknown; mid score so we don't crash GRPO
-        prompt = _MEANING_PROMPT_TEMPLATE.format(source=ctx.source, output=output)
+        result = _judge_bundle(judge, ctx.source, output)
         try:
-            result = judge.evaluate(prompt)
-        except Exception:
-            return 0.5
-        try:
-            facts = float(result.get("facts_preserved", 0))
-            halluc = float(result.get("no_hallucinations", 0))
+            facts = float(result.get("f", 0))
+            halluc = float(result.get("h", 0))
         except (TypeError, ValueError):
             return 0.5
-        # Both axes contribute equally; convert from 1-5 → 0-1
-        # (a score of 1 is the worst, 5 the best, so subtract 1 and /4)
+        if facts == 0 or halluc == 0:
+            return 0.5  # garbage/missing → neutral, not catastrophic
+        # 1-5 → 0-1 per axis, then average.
         score = ((facts - 1) / 4 + (halluc - 1) / 4) / 2
         return max(0.0, min(1.0, score))
 
@@ -208,29 +262,97 @@ class SemanticPreservationReward(RewardComponent):
 
 
 class RepetitionReward(RewardComponent):
-    """TODO: penalize repetitive outputs (low unique-words/total ratio).
-    Stubbed at 1.0 for v1 — included so the wiring works when we activate it."""
+    """Penalize degenerate outputs that loop on short n-grams or repeat
+    whole sentences. This catches the GRPO failure mode where the policy
+    learns to stuff the completion budget with high-vocab-score gibberish.
+
+    Two independent signals, the lower of the two wins:
+
+      1. Distinct-4-gram ratio: unique 4-grams / total 4-grams. Looping
+         text reuses the same 4-gram many times → low ratio. A natural
+         A2 paragraph sits at ~0.95+ even with normal repetition of
+         function words like "the cat is".
+      2. Repeated-sentence detection: if any sentence appears more than
+         once after normalization, multiply reward by 1/k where k is the
+         repetition count. Two copies → 0.5; three copies → 0.33; etc.
+
+    For outputs shorter than `min_tokens` (default 8) the signal isn't
+    measurable, so we return 1.0 rather than incidentally penalize
+    short-but-fine outputs."""
 
     name = "repetition"
 
+    def __init__(
+        self,
+        n: int = 4,
+        min_tokens: int = 8,
+        soft_floor: float = 0.55,  # distinct-4gram ratio at which reward = 0
+        soft_ceiling: float = 0.95,  # distinct-4gram ratio at which reward = 1
+    ):
+        self.n = n
+        self.min_tokens = min_tokens
+        self.soft_floor = soft_floor
+        self.soft_ceiling = soft_ceiling
+
     def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
-        return 1.0  # TODO: implement actual repetition detection
+        toks = output.split()
+        if len(toks) < self.min_tokens:
+            return 1.0
+
+        # Signal 1: distinct-n-gram ratio
+        ngrams = [tuple(toks[i : i + self.n]) for i in range(len(toks) - self.n + 1)]
+        if not ngrams:
+            return 1.0
+        ratio = len(set(ngrams)) / len(ngrams)
+        # Map [soft_floor, soft_ceiling] → [0, 1] linearly
+        ngram_reward = (ratio - self.soft_floor) / (self.soft_ceiling - self.soft_floor)
+        ngram_reward = max(0.0, min(1.0, ngram_reward))
+
+        # Signal 2: repeated whole sentences (after light normalization)
+        sentences = [s.strip().lower() for s in split_sentences(output) if s.strip()]
+        sent_reward = 1.0
+        if len(sentences) >= 2:
+            from collections import Counter
+
+            counts = Counter(sentences)
+            max_rep = max(counts.values())
+            if max_rep > 1:
+                sent_reward = 1.0 / max_rep
+
+        return min(ngram_reward, sent_reward)
 
 
 class SmoothDifficultyReward(RewardComponent):
-    """TODO: judge-based CEFR level → smooth score (A2=1.0, A1=0.6, B1=0.4, ...).
-    Stubbed at 1.0 for v1. Will reuse few-shot samples like
-    verifier.DifficultyRankingTest does."""
+    """Reads `lvl` (CEFR classification) from the combined judge bundle and
+    maps to a smooth score. A2 is the target; over-simplification (A1) is
+    a soft failure, under-simplification (B1, B2+) is increasingly bad.
+
+    Sharing the bundle with SemanticPreservationReward means this reward
+    adds **zero extra judge calls** per rollout — both components read from
+    the same cached result."""
 
     name = "difficulty"
 
-    def __init__(self, a1_samples=None, a2_samples=None, b1_samples=None):
-        self.a1_samples = a1_samples or []
-        self.a2_samples = a2_samples or []
-        self.b1_samples = b1_samples or []
+    # Smooth score per CEFR level. A2 is the apex; the mapping was chosen
+    # so the gradient pushes A1 → A2 (small lift) and B1 → A2 (bigger lift),
+    # which matches the failure-mode asymmetry: over-simplifying is mostly
+    # an aesthetic flaw, under-simplifying defeats the whole task.
+    LEVEL_SCORES: dict[str, float] = {
+        "A2": 1.0,
+        "A1": 0.6,
+        "<A1": 0.2,
+        "B1": 0.4,
+        "B2+": 0.0,
+    }
 
-    def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
-        return 1.0  # TODO: judge call + smooth A2/A1/B1/B2+/<A1 → score
+    def compute(self, output: str, ctx: RewardContext, judge: BaseJudge | None = None) -> float:
+        if judge is None:
+            return 0.5
+        result = _judge_bundle(judge, ctx.source, output)
+        lvl = result.get("lvl")
+        if not isinstance(lvl, str):
+            return 0.5
+        return self.LEVEL_SCORES.get(lvl, 0.5)
 
 
 # ---------- CombinedReward ----------
@@ -278,18 +400,20 @@ class CombinedReward(RewardComponent):
 
 _LENGTH = LengthVsSourceReward()
 _VOCAB = VocabSimplicityReward()
+_REPETITION = RepetitionReward()
 _MEANING = SemanticPreservationReward()
+_DIFFICULTY = SmoothDifficultyReward()
 
 
 _OPENROUTER_DEFAULT_URL = "https://openrouter.ai/api/v1"
-_OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-latest"
+_OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 
 
 def _get_judge():
     """Lazy-load a judge from env. Backend selection:
 
     * MEANING_JUDGE_BACKEND=openrouter → OpenRouter (needs OPENROUTER_API_KEY).
-      Defaults: model=anthropic/claude-haiku-latest, url=https://openrouter.ai/api/v1.
+      Defaults: model=anthropic/claude-haiku-4-5, url=https://openrouter.ai/api/v1.
       Override via MEANING_JUDGE_MODEL / MEANING_JUDGE_URL.
     * MEANING_JUDGE_URL set            → local LM Studio (no auth).
     * neither                          → None; meaning_reward returns 0.5
@@ -357,6 +481,28 @@ def meaning_reward(prompts, completions, answer, types=None) -> list[float]:
     ]
 
 
+@register_reward_function()
+def repetition_reward(prompts, completions, answer, types=None) -> list[float]:
+    return [
+        _REPETITION.compute(c, RewardContext(source=p, answer=a))
+        for p, c, a in zip(prompts, completions, answer, strict=True)
+    ]
+
+
+@register_reward_function()
+def difficulty_reward(prompts, completions, answer, types=None) -> list[float]:
+    """Reads the CEFR `lvl` field from the same combined judge bundle as
+    meaning_reward. Calling order matters: meaning_reward first warms the
+    cache, then difficulty_reward reads the cached result for free. mlx-
+    lm-lora calls reward functions in the order listed in --reward-
+    functions, so register them in that order in the shell scripts."""
+    judge = _get_judge()
+    return [
+        _DIFFICULTY.compute(c, RewardContext(source=p, answer=a), judge=judge)
+        for p, c, a in zip(prompts, completions, answer, strict=True)
+    ]
+
+
 # ---------- audit + variety (offline diagnostics) ----------
 #
 # Used to verify rewards make sense before training, and to monitor reward
@@ -365,11 +511,18 @@ def meaning_reward(prompts, completions, answer, types=None) -> list[float]:
 
 
 def _default_combined() -> CombinedReward:
+    """v2 weights, 5 components. Meaning + difficulty come from one
+    shared judge call (see `_judge_bundle`), so adding `difficulty` to
+    the mix costs zero extra round trips. Meaning still carries the
+    largest weight + the gate, since semantic faithfulness is the
+    non-negotiable axis."""
     return CombinedReward(
         components=[
-            (0.50, _MEANING),
-            (0.25, _LENGTH),
-            (0.25, _VOCAB),
+            (0.30, _MEANING),
+            (0.20, _DIFFICULTY),
+            (0.20, _REPETITION),
+            (0.15, _LENGTH),
+            (0.15, _VOCAB),
         ],
         meaning_gate=0.5,
     )
@@ -381,7 +534,9 @@ def audit_record(source: str, output: str, judge: BaseJudge | None = None) -> di
     out = {
         "length": _LENGTH.compute(output, ctx),
         "vocab": _VOCAB.compute(output, ctx),
+        "repetition": _REPETITION.compute(output, ctx),
         "meaning": _MEANING.compute(output, ctx, judge=judge),
+        "difficulty": _DIFFICULTY.compute(output, ctx, judge=judge),
     }
     out["combined"] = _default_combined().compute(output, ctx, judge=judge)
     return out

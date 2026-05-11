@@ -4,7 +4,7 @@
 # Reward functions live in rewards.py (length_reward, vocab_reward,
 # meaning_reward). The meaning reward picks a judge from env:
 #   * MEANING_JUDGE_BACKEND=openrouter + OPENROUTER_API_KEY
-#       → hosted judge (default model: anthropic/claude-haiku-latest)
+#       → hosted judge (default model: anthropic/claude-haiku-4-5)
 #   * MEANING_JUDGE_URL set (no backend flag)
 #       → local LM Studio / vLLM at that URL
 #   * neither set

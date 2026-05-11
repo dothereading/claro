@@ -672,13 +672,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="adapters/dpo/latest/adapters.safetensors",
         help="resume from this adapter file (silently ignored if missing)",
     )
-    grpo.add_argument("--reward-functions", default="length_reward,vocab_reward,meaning_reward")
+    # Reward functions are called by mlx-lm-lora in the order listed below.
+    # meaning_reward MUST come before difficulty_reward — both pull from a
+    # shared judge bundle keyed on (source, output); meaning warms the
+    # cache so difficulty is free. Weights match the order, sum to 1.0,
+    # mirror langsimp.training.rewards._default_combined().
+    grpo.add_argument(
+        "--reward-functions",
+        default="meaning_reward,difficulty_reward,repetition_reward,length_reward,vocab_reward",
+    )
     grpo.add_argument(
         "--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py")
     )
     grpo.add_argument(
         "--reward-weights",
-        default="[0.25,0.25,0.50]",
+        default="[0.30,0.20,0.20,0.15,0.15]",
         help="JSON list, must match the order/length of --reward-functions",
     )
     grpo.add_argument(

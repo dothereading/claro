@@ -94,7 +94,7 @@ async def run(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--runs", type=int, default=4)
-    p.add_argument("--model", default="anthropic/claude-haiku-latest")
+    p.add_argument("--model", default="anthropic/claude-haiku-4-5")
     p.add_argument("--temperature", type=float, default=0.4)
     p.add_argument("--seed", type=int, default=None, help="seed for paragraph selection")
     p.add_argument("--min-words", type=int, default=80)

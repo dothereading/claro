@@ -329,7 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dpo.add_argument("--output", default=str(REPO_ROOT / "data" / "dpo.jsonl"))
     dpo.add_argument("--weak-teacher", default="google/gemma-3-4b-it",
                      help="model for the 'mediocre A2 attempt' strategy (60%% of records)")
-    dpo.add_argument("--strong-teacher", default="~anthropic/claude-haiku-latest",
+    dpo.add_argument("--strong-teacher", default="anthropic/claude-haiku-4-5",
                      help="model for the alternative-prompt strategies (40%% of records)")
     dpo.add_argument("--concurrency", type=int, default=8)
     dpo.add_argument("--max-retries", type=int, default=3)

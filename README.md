@@ -67,7 +67,7 @@ bash scripts/train_dpo_mlx.sh     # DPO,  resumes from adapters/sft/latest
 bash scripts/train_grpo_mlx.sh    # GRPO, resumes from adapters/dpo/latest by default
 
 # GRPO meaning-reward judge — pick one:
-#   * OpenRouter (recommended; defaults to anthropic/claude-haiku-latest):
+#   * OpenRouter (recommended; defaults to anthropic/claude-haiku-4-5):
 #       MEANING_JUDGE_BACKEND=openrouter bash scripts/train_grpo_mlx.sh
 #   * Local LM Studio at http://127.0.0.1:1234/v1:
 #       MEANING_JUDGE_URL=http://127.0.0.1:1234/v1 bash scripts/train_grpo_mlx.sh
