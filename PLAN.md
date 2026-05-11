@@ -15,12 +15,21 @@ Fine-tune a small Gemma model to perform language simplification, transforming c
 *   [x] **Distillation prompt iterated**: dropped low-info detail aggressively, killed redundant cappers, raised A2-floor guidance, encouraged adult register and concept-first ordering. A/B test on a fixed 10-paragraph sample showed length-ratio score 0.957→0.982 and judge A2 hit-rate 6/10→7/10.
 *   [x] **Data-quality validator** (`langsimp.data.audit`): flags `length_inflated`, `monotonous`, `too_easy`, `too_hard` per record; reports aggregates.
 *   [x] **Held-out eval set carved** — `data/eval.jsonl` (30 records). `langsimp.data.mlx_format carve-eval` is deterministic (hash-based) and refuses to overwrite without `--force`. Splits use hash-based assignment (`assign_split`) so the same prompt always lands in the same bucket — SFT-valid and DPO-valid are guaranteed to contain the same prompts (verified: 16/16 overlap, 0 overlap with eval).
-*   [ ] Grow SFT dataset (target ≥1k pairs) to combat the val-loss climb seen in the current run. New rows generated after this point use the iterated prompt; eval set stays frozen.
+*   [x] SFT dataset grown to **621 pairs** (`data/sft.jsonl`), all from the iterated prompt. The 1000-row run topped out at 621 because the OpenRouter monthly key cap hit mid-run; the run also surfaced a latent fetcher bug where a Wikipedia random-summary 4xx (malformed redirect on a title containing "/") killed the iterator — fixed in `c0f1a2d` so any 4xx is now skipped.
 
 ### Phase 2: Supervised Fine-Tuning (SFT)
 *   **Engine:** mlx-lm LoRA (`scripts/train_mlx.sh`).
-*   **Status:** trained 300 iters; train loss 0.2–0.5, val loss climbing 1.9 → 2.4 → likely overfitting on 90 train rows. Re-run after dataset grows.
-*   **Note:** `langsimp.data.mlx_format sft` now defaults to using *all* rows; the existing adapter was trained on a 100-row subset. To reproduce: pass `--n 100`.
+*   **Status (2026-05-10):** trained 600 iters on 558 train / 63 valid rows. Val loss **3.92 → 1.65** with no climb (vs old 90-row run that overfit at 2.4). Adapter at `adapters/sft/latest` → `20260510T225941-c0f1a2d`.
+*   **Held-out eval (30 records, LM Studio judge `google/gemma-4-26b-a4b`):**
+
+    |  | Base | SFT |
+    |---|---|---|
+    | % A2 | 6.7% | **76.7%** |
+    | % too easy (A1) | 93.3% | 13.3% |
+    | % too hard (B1) | 0% | 10.0% |
+    | Mean length ratio | 0.68 | 1.09 |
+
+    Base model defaults to telegraphic A1 ("He is a leader. He is from Nigeria.") — register failure. SFT fixed register + length; remaining errors are faithfulness slips (e.g. "1,700 customers" → "Each room can hold 1,700 people") and B1 domain-vocab leakage on technical topics. Full results: `eval_results/{sft,base}_*.json`.
 
 ### Phase 3: Reinforcement Learning (GRPO)
 *   [x] **GRPO data prep** (`langsimp.data.mlx_format grpo`): emits `data/grpo/{train,valid}.jsonl` in mlx-lm-lora's `{prompt, answer, system}` shape; excludes eval prompts; holds out 30 records as a *GRPO valid set* (separate from `data/eval.jsonl`); curriculum-sorts train ascending by source length.
