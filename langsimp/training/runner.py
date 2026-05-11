@@ -679,14 +679,17 @@ def _build_parser() -> argparse.ArgumentParser:
     # mirror langsimp.training.rewards._default_combined().
     grpo.add_argument(
         "--reward-functions",
-        default="meaning_reward,difficulty_reward,repetition_reward,length_reward,vocab_reward",
+        default=(
+            "meaning_reward,difficulty_reward,repetition_reward,"
+            "vocab_reward,length_reward,markdown_reward"
+        ),
     )
     grpo.add_argument(
         "--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py")
     )
     grpo.add_argument(
         "--reward-weights",
-        default="[0.30,0.20,0.20,0.15,0.15]",
+        default="[0.40,0.25,0.15,0.10,0.05,0.05]",
         help="JSON list, must match the order/length of --reward-functions",
     )
     grpo.add_argument(

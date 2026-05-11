@@ -307,6 +307,74 @@ class TestJudgeBundleCache:
 # ---------- Stubs (must exist; numeric behavior is TBD) ----------
 
 
+class TestNoMarkdownReward:
+    """Format-adherence guardrail. The DPO data already steers against
+    markdown, but a small reward signal keeps the policy from drifting
+    back into bullets/headings/bold during GRPO.
+
+    Binary by design: any markdown marker → 0.0, none → 1.0. Subtle
+    "is it kind of markdown" cases aren't worth the false-positive risk.
+    """
+
+    def test_plain_prose_scores_one(self):
+        r = rewards.NoMarkdownReward()
+        text = (
+            "Washington, D.C. is the capital of the United States. "
+            "The city is on the Potomac River. Many people work for "
+            "the government there."
+        )
+        assert r.compute(text, rewards.RewardContext(source="x")) == 1.0
+
+    def test_empty_text_scores_one(self):
+        r = rewards.NoMarkdownReward()
+        assert r.compute("", rewards.RewardContext(source="x")) == 1.0
+
+    def test_bold_caught(self):
+        r = rewards.NoMarkdownReward()
+        s = r.compute("Plain prose with **bold word** in it.", rewards.RewardContext(source="x"))
+        assert s == 0.0
+
+    def test_heading_caught(self):
+        r = rewards.NoMarkdownReward()
+        for text in ("# Title\nText.", "## Section\nText.", "### Sub\nText."):
+            s = r.compute(text, rewards.RewardContext(source="x"))
+            assert s == 0.0, f"heading not caught: {text!r}"
+
+    def test_bullet_list_caught(self):
+        r = rewards.NoMarkdownReward()
+        text = "Three items:\n- first\n- second\n- third"
+        assert r.compute(text, rewards.RewardContext(source="x")) == 0.0
+
+    def test_numbered_list_caught(self):
+        r = rewards.NoMarkdownReward()
+        text = "Steps:\n1. Open the door.\n2. Walk inside."
+        assert r.compute(text, rewards.RewardContext(source="x")) == 0.0
+
+    def test_inline_code_caught(self):
+        r = rewards.NoMarkdownReward()
+        s = r.compute("The variable is `x` in the code.", rewards.RewardContext(source="x"))
+        assert s == 0.0
+
+    def test_link_caught(self):
+        r = rewards.NoMarkdownReward()
+        s = r.compute(
+            "Visit [the site](https://example.com) for more.", rewards.RewardContext(source="x")
+        )
+        assert s == 0.0
+
+    def test_em_dash_not_treated_as_bullet(self):
+        # Opus loves em-dashes; they must not trip the bullet detector.
+        r = rewards.NoMarkdownReward()
+        text = "Washington, D.C. — the capital — is on the Potomac River."
+        assert r.compute(text, rewards.RewardContext(source="x")) == 1.0
+
+    def test_sentence_initial_number_period_not_caught(self):
+        # "Section 1. Introduction" should NOT count as a numbered list.
+        r = rewards.NoMarkdownReward()
+        text = "In 1985 the building opened. By 1992 it was rebuilt."
+        assert r.compute(text, rewards.RewardContext(source="x")) == 1.0
+
+
 class TestRepetitionReward:
     """Catches the GRPO failure mode seen in the smoke run: policy degenerates
     into 4-gram loops that max out the completion budget. Without this signal

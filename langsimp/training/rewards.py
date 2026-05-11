@@ -1,29 +1,39 @@
 """GRPO reward components for language simplification.
 
-Five active components in v2:
+Six active components in v3, weighted by importance (sum = 1.0):
 
   Pure-Python (no judge):
-    * LengthVsSourceReward    — output/source word ratio in [0.8, 1.3]
-    * VocabSimplicityReward   — uncommon-word penalty per sentence
+    * LengthVsSourceReward    — output/source word ratio in [0.8, 1.3]      w=0.05
+    * VocabSimplicityReward   — uncommon-word penalty per sentence          w=0.10
                                 (top-3000 wordfreq, calibrated against
-                                chosen/rejected/bad in data/{sft,dpo}.jsonl)
-    * RepetitionReward        — distinct-4-gram ratio + repeated-sentence
-                                detection; catches the GRPO failure mode
-                                where the policy loops to fill the budget.
+                                 chosen/rejected/bad in data/{sft,dpo}.jsonl)
+    * RepetitionReward        — distinct-4-gram ratio + repeated-sentence   w=0.15
+                                detection (catches the GRPO loop failure)
+    * NoMarkdownReward        — binary: 0 if any markdown marker present    w=0.05
 
   Judge-backed (share one combined HTTP call per rollout):
-    * SemanticPreservationReward — facts kept + no hallucinations (`f`, `h`)
-    * SmoothDifficultyReward     — CEFR level → smooth score (`lvl`)
+    * SemanticPreservationReward — facts kept + no hallucinations (`f`, `h`)  w=0.40
+    * SmoothDifficultyReward     — CEFR level → smooth score (`lvl`)           w=0.25
 
 The two judge rewards read from a shared `_judge_bundle()` cache keyed
 on (source, output), so adding difficulty costs zero extra round trips
 vs. meaning alone. Benchmarked: combined call is 2.1× faster than two
-independent calls at parity on meaning scores.
+independent calls; anchored prompt (samples.jsonl A1/A2/B1 examples)
+brings independent/combined CEFR agreement from 0/9 to 6/9.
+
+Weighting rationale: meaning (0.40) dominates because a hallucinated
+output is worse than no simplification — faithfulness is the
+non-negotiable axis. Difficulty (0.25) is the explicit task target.
+Repetition (0.15) is a guardrail with hard penalty when it fires.
+Vocab/length/markdown (0.10/0.05/0.05) are finer guardrails; mostly
+pinned at 1.0 in normal training, contribute zero advantage gradient
+when the policy is well-behaved.
 
 CombinedReward aggregates with a *meaning gate*: if the meaning score
-is below the gate threshold, the entire reward is zeroed. This prevents
-the model from gaming the cheaper rewards by silently shedding source
-content.
+is below the gate threshold (0.3 — intentionally low to avoid starving
+early training), the entire reward is zeroed. Hard floor against
+catastrophic faithfulness failures; soft enough that mediocre-but-
+recoverable rollouts can contribute gradient through the weighted sum.
 
 The bottom of the file contains thin `@register_reward_function`-style
 adapters that mlx_lm_lora.train discovers via --reward-functions-file.
@@ -367,6 +377,39 @@ class RepetitionReward(RewardComponent):
         return min(ngram_reward, sent_reward)
 
 
+_MARKDOWN_PATTERNS = [
+    re.compile(r"\*\*[^*\n]+\*\*"),  # **bold**
+    re.compile(r"__[^_\n]+__"),  # __bold__
+    re.compile(r"^#{1,6}\s", re.MULTILINE),  # # heading at line start
+    re.compile(r"^\s*[-*+]\s", re.MULTILINE),  # bullet at line start ("- ", "* ", "+ ")
+    re.compile(r"^\s*\d+\.\s\S", re.MULTILINE),  # numbered list at line start
+    re.compile(r"`[^`\n]+`"),  # `inline code` or ```block```
+    re.compile(r"^>\s", re.MULTILINE),  # > blockquote
+    re.compile(r"\[[^\]\n]+\]\([^)\n]+\)"),  # [link](url)
+]
+
+
+class NoMarkdownReward(RewardComponent):
+    """Format-adherence guardrail. Returns 1.0 if the output is plain
+    prose, 0.0 if any markdown marker is detected.
+
+    Binary by design — half-credit for "kind of markdown" would invite
+    false positives on legitimate prose punctuation (em-dashes, mid-
+    sentence numbers, parenthetical refs). The patterns are anchored
+    where possible so things like "In 1985 the building opened" or
+    "Washington — the capital" don't trigger."""
+
+    name = "markdown"
+
+    def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
+        if not output:
+            return 1.0
+        for pat in _MARKDOWN_PATTERNS:
+            if pat.search(output):
+                return 0.0
+        return 1.0
+
+
 class SmoothDifficultyReward(RewardComponent):
     """Reads `lvl` (CEFR classification) from the combined judge bundle and
     maps to a smooth score. A2 is the target; over-simplification (A1) is
@@ -408,14 +451,21 @@ class CombinedReward(RewardComponent):
     scores below `meaning_gate`, the whole reward is zeroed.
 
     The meaning gate is the safety belt against the model gaming the
-    cheaper rewards (length, vocab) by silently dropping content."""
+    cheaper rewards (length, vocab) by silently dropping content.
+
+    The default gate is intentionally low (0.3) — early in GRPO the policy
+    is weak and meaning scores cluster around 0.5; a higher gate would zero
+    the reward on most rollouts and starve the training signal. 0.3 still
+    blocks catastrophic faithfulness failures (judge says 1-2 / 5 on
+    both axes → meaning ≈ 0.0-0.25) while letting mediocre-but-recoverable
+    rollouts contribute gradient through the weighted sum."""
 
     name = "combined"
 
     def __init__(
         self,
         components: list[tuple[float, RewardComponent]],
-        meaning_gate: float = 0.5,
+        meaning_gate: float = 0.3,
     ):
         self.components = components
         self.meaning_gate = meaning_gate
@@ -446,6 +496,7 @@ class CombinedReward(RewardComponent):
 _LENGTH = LengthVsSourceReward()
 _VOCAB = VocabSimplicityReward()
 _REPETITION = RepetitionReward()
+_MARKDOWN = NoMarkdownReward()
 _MEANING = SemanticPreservationReward()
 _DIFFICULTY = SmoothDifficultyReward()
 
@@ -548,6 +599,14 @@ def difficulty_reward(prompts, completions, answer, types=None) -> list[float]:
     ]
 
 
+@register_reward_function()
+def markdown_reward(prompts, completions, answer, types=None) -> list[float]:
+    return [
+        _MARKDOWN.compute(c, RewardContext(source=p, answer=a))
+        for p, c, a in zip(prompts, completions, answer, strict=True)
+    ]
+
+
 # ---------- audit + variety (offline diagnostics) ----------
 #
 # Used to verify rewards make sense before training, and to monitor reward
@@ -556,20 +615,34 @@ def difficulty_reward(prompts, completions, answer, types=None) -> list[float]:
 
 
 def _default_combined() -> CombinedReward:
-    """v2 weights, 5 components. Meaning + difficulty come from one
-    shared judge call (see `_judge_bundle`), so adding `difficulty` to
-    the mix costs zero extra round trips. Meaning still carries the
-    largest weight + the gate, since semantic faithfulness is the
-    non-negotiable axis."""
+    """v3 weights — opinionated, not uniform. Reasoning:
+
+      * meaning (0.40): faithfulness is the highest-stakes axis. A
+        hallucinated A2 is worse than a faithful B1. Plus the meaning
+        gate is the safety belt.
+      * difficulty (0.25): "make this A2" is the explicit task target.
+      * repetition (0.15): guardrail. Usually pinned at 1.0, but when it
+        fires the failure is total — we want a real penalty.
+      * vocab (0.10): per-sentence granularity that difficulty (4 buckets)
+        can't see; correlated with difficulty so it shouldn't dominate.
+      * length (0.05): mostly redundant with meaning + difficulty
+        (dropping content lowers both). Guardrail only.
+      * markdown (0.05): narrow binary failure; cheap reinforcement of
+        the DPO format constraint.
+
+    Meaning + difficulty = 0.65 of the signal, share one judge call (free).
+    Guardrails sum to 0.25 and contribute zero advantage gradient when the
+    policy is well-behaved — that's by design."""
     return CombinedReward(
         components=[
-            (0.30, _MEANING),
-            (0.20, _DIFFICULTY),
-            (0.20, _REPETITION),
-            (0.15, _LENGTH),
-            (0.15, _VOCAB),
+            (0.40, _MEANING),
+            (0.25, _DIFFICULTY),
+            (0.15, _REPETITION),
+            (0.10, _VOCAB),
+            (0.05, _LENGTH),
+            (0.05, _MARKDOWN),
         ],
-        meaning_gate=0.5,
+        meaning_gate=0.3,
     )
 
 
@@ -580,6 +653,7 @@ def audit_record(source: str, output: str, judge: BaseJudge | None = None) -> di
         "length": _LENGTH.compute(output, ctx),
         "vocab": _VOCAB.compute(output, ctx),
         "repetition": _REPETITION.compute(output, ctx),
+        "markdown": _MARKDOWN.compute(output, ctx),
         "meaning": _MEANING.compute(output, ctx, judge=judge),
         "difficulty": _DIFFICULTY.compute(output, ctx, judge=judge),
     }
