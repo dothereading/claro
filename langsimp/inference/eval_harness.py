@@ -49,8 +49,13 @@ def evaluate_eval_set(
     records: list[dict],
     generate_fn: Callable[[str], str],
     classify_fn: Callable[[str], str],
+    classify_workers: int = 10,
 ) -> list[dict]:
     """For each record, generate a simplification and classify its level.
+
+    Generate is sequential (MLX is GPU-bound on Apple Silicon; concurrent
+    calls would just time-share the same device). Classify is parallel via
+    a thread pool — the judge is an HTTP call, so I/O concurrency is free.
 
     `generate_fn(complex_text) -> output_text`
     `classify_fn(output_text) -> CEFR label`
@@ -58,15 +63,32 @@ def evaluate_eval_set(
     If `classify_fn` raises, the level is recorded as "NA" rather than
     crashing the whole run — partial results are more useful than none.
     """
-    results: list[dict] = []
-    for rec in records:
-        complex_text = rec["complex"]
-        output = generate_fn(complex_text)
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Step 1: sequential MLX generation.
+    outputs: list[str] = []
+    for i, rec in enumerate(records):
+        out = generate_fn(rec["complex"])
+        outputs.append(out)
+        if (i + 1) % 10 == 0 or (i + 1) == len(records):
+            print(f"[eval] generated {i + 1}/{len(records)}", flush=True)
+
+    # Step 2: parallel judge calls.
+    def _safe_classify(text: str) -> str:
         try:
-            level = classify_fn(output)
+            return classify_fn(text)
         except Exception as e:
             print(f"[eval] classify failed: {e}", flush=True)
-            level = "NA"
+            return "NA"
+
+    print(f"[eval] judging {len(outputs)} outputs ({classify_workers} workers)...", flush=True)
+    with ThreadPoolExecutor(max_workers=classify_workers) as pool:
+        levels = list(pool.map(_safe_classify, outputs))
+
+    # Assemble results in record order.
+    results: list[dict] = []
+    for rec, output, level in zip(records, outputs, levels):
+        complex_text = rec["complex"]
         results.append(
             {
                 "complex": complex_text,
@@ -200,12 +222,29 @@ def main() -> int:
         help="JSON results path; default eval_results/<adapter_name>_<timestamp>.json",
     )
     p.add_argument("--max-tokens", type=int, default=512)
+    p.add_argument(
+        "--judge-backend",
+        default="lm-studio",
+        choices=["lm-studio", "openrouter"],
+        help="lm-studio = local server at --lm-studio-url; openrouter = hosted via OPENROUTER_API_KEY",
+    )
     p.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1")
     p.add_argument("--judge-model", default="google/gemma-4-26b-a4b")
     p.add_argument(
         "--n-samples", type=int, default=3, help="how many sample outputs to show in the report"
     )
-    p.add_argument("--limit", type=int, default=0, help="0 = run all eval records")
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="how many eval records to use; 0 = all records in --eval-path",
+    )
+    p.add_argument(
+        "--classify-workers",
+        type=int,
+        default=10,
+        help="thread pool size for parallel judge calls",
+    )
     args = p.parse_args()
 
     # Wire up the I/O.
@@ -218,7 +257,22 @@ def main() -> int:
     generate_fn, _tokenizer = _make_generate_fn(args.model, adapter_path, args.max_tokens)
 
     samples = _load_verifier_samples()
-    judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
+    if args.judge_backend == "openrouter":
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise SystemExit("OPENROUTER_API_KEY not set (env or .env)")
+        judge = LocalJudge(
+            base_url="https://openrouter.ai/api/v1",
+            model_name=args.judge_model,
+            api_key=api_key,
+        )
+        print(f"[eval] judge: openrouter model={args.judge_model}", flush=True)
+    else:
+        judge = LocalJudge(base_url=args.lm_studio_url, model_name=args.judge_model)
+        print(f"[eval] judge: lm-studio url={args.lm_studio_url} model={args.judge_model}", flush=True)
     judge_test = DifficultyRankingTest(
         a1_samples=samples["A1"],
         b1_samples=samples["B1"],
@@ -230,7 +284,9 @@ def main() -> int:
         return judge_test.classify(text, judge)
 
     started = time.time()
-    results = evaluate_eval_set(eval_records, generate_fn, classify_fn)
+    results = evaluate_eval_set(
+        eval_records, generate_fn, classify_fn, classify_workers=args.classify_workers
+    )
     elapsed = time.time() - started
     summary = summarize(results)
 

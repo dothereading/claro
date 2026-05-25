@@ -643,3 +643,144 @@ class TestRewardVariety:
         for p in stats["per_prompt"]:
             assert "mean" in p and "std" in p and "rewards" in p
             assert len(p["rewards"]) == 4
+
+
+# ---------- v5: Entity preservation + combined v5 ----------
+
+
+class TestEntityPreservationReward:
+    """v5 component: % of named entities from source that appear in output.
+    Entities = capitalized multi-word phrases, all-caps acronyms (UCL, MI6),
+    and 2-4 digit numbers (1750, 2013)."""
+
+    def _r(self):
+        return rewards.EntityPreservationReward()
+
+    def test_full_credit_when_all_entities_preserved(self):
+        src = "Christina Pagel works at University College London (UCL) since 2017."
+        out = "Christina Pagel works at University College London (UCL). She joined in 2017."
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(1.0)
+
+    def test_zero_credit_when_no_entities_preserved(self):
+        src = "Christina Pagel works at University College London since 2017."
+        out = "A scientist works at a university."
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(0.0)
+
+    def test_partial_credit_proportional(self):
+        # source has 3 entities (Christina Pagel, University College London, 2017)
+        # output keeps 2/3
+        src = "Christina Pagel works at University College London since 2017."
+        out = "Christina Pagel works at University College London."
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(2 / 3, abs=0.05)
+
+    def test_acronyms_detected(self):
+        src = "She works at the GMC and UCL."
+        out = "She works at the GMC and UCL."
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(1.0)
+
+    def test_case_insensitive_match(self):
+        src = "Cayan Tower is in Dubai."
+        out = "The cayan tower is in dubai."
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(1.0)
+
+    def test_no_entities_in_source_returns_one(self):
+        src = "the cat sat on the mat"
+        out = "a cat is on a mat"
+        s = self._r().compute(out, rewards.RewardContext(source=src))
+        assert s == pytest.approx(1.0)
+
+
+class TestCombinedRewardV5:
+    """v5: base = 0.6*meaning + 0.4*entity, multiplied by difficulty_factor
+    and length_factor, with hard gates for meaning<0.3, markdown, and loops.
+    """
+
+    def setup_method(self):
+        rewards._judge_cache.clear()
+
+    def _ctx(self, source: str):
+        return rewards.RewardContext(source=source)
+
+    A2_CLEAN = (
+        "Christina Pagel is a German-British mathematician. "
+        "She works at University College London. UCL is a famous university. "
+        "She started there in 2017 and helps doctors do research."
+    )
+
+    # Picked so A2_CLEAN (32 words) / SRC (25 words) ≈ 1.28, inside [0.8, 1.4]
+    SRC_SHORT = (
+        "Christina Pagel is a German-British mathematician at University "
+        "College London. She has worked at UCL since 2017 doing applied "
+        "medical research."
+    )
+
+    def test_clean_a2_full_credit(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        r = rewards._default_combined_v5()
+        s = r.compute(self.A2_CLEAN, self._ctx(self.SRC_SHORT), judge=judge)
+        # meaning=1, diff=A2(1.0), entity≈1, length OK → ~1.0
+        assert s >= 0.9
+
+    def test_meaning_gate_zeroes_reward(self):
+        # meaning < 0.3 → 0
+        judge = StubJudge({"f": 1, "h": 1, "lvl": "A2"})
+        r = rewards._default_combined_v5()
+        s = r.compute(self.A2_CLEAN, self._ctx(self.SRC_SHORT), judge=judge)
+        assert s == pytest.approx(0.0)
+
+    def test_markdown_gate_zeroes_reward(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        with_markdown = "**Christina Pagel** works at UCL since 2017."
+        r = rewards._default_combined_v5()
+        s = r.compute(with_markdown, self._ctx(self.SRC_SHORT), judge=judge)
+        assert s == pytest.approx(0.0)
+
+    def test_loop_gate_zeroes_reward(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        loop = "Pagel works at UCL. Pagel works at UCL. Pagel works at UCL. Pagel works at UCL."
+        r = rewards._default_combined_v5()
+        s = r.compute(loop, self._ctx(self.SRC_SHORT), judge=judge)
+        assert s == pytest.approx(0.0)
+
+    def test_a1_difficulty_softens_reward(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A1"})
+        r = rewards._default_combined_v5()
+        s = r.compute(self.A2_CLEAN, self._ctx(self.SRC_SHORT), judge=judge)
+        # base ≈ 1.0, A1 factor = 0.85, length_factor=1.0 → ~0.85
+        assert 0.75 <= s <= 0.95
+
+    def test_b1_difficulty_more_harshly_penalized(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "B1"})
+        r = rewards._default_combined_v5()
+        s = r.compute(self.A2_CLEAN, self._ctx(self.SRC_SHORT), judge=judge)
+        # B1 factor = 0.6 — strictly less than A1's 0.85
+        assert 0.45 <= s <= 0.7
+
+    def test_b2plus_zeroes_reward(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "B2+"})
+        r = rewards._default_combined_v5()
+        s = r.compute(self.A2_CLEAN, self._ctx(self.SRC_SHORT), judge=judge)
+        assert s == pytest.approx(0.0)
+
+    def test_too_short_length_penalized(self):
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        very_short = "She works."  # 2 words; SRC is 25 → ratio 0.08 < 0.5 floor → 0
+        r = rewards._default_combined_v5()
+        s = r.compute(very_short, self._ctx(self.SRC_SHORT), judge=judge)
+        assert s == pytest.approx(0.0)
+
+    def test_slightly_long_not_penalized(self):
+        # Asymmetric: ratio 1.3 should still be full credit (window [0.8, 1.4])
+        judge = StubJudge({"f": 5, "h": 5, "lvl": "A2"})
+        src = "X Y Z A B C D E F G."  # 10 words
+        long_out = "X Y Z A B C D E F G H I J."  # 13 words, ratio 1.3
+        r = rewards._default_combined_v5()
+        s = r.compute(long_out, self._ctx(src), judge=judge)
+        # Length should be full credit; only the meaning + entity drives
+        assert s >= 0.5  # broad floor; depends on entity match on token-soup
+

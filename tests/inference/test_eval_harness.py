@@ -49,6 +49,49 @@ class TestEvaluateEvalSet:
         results = eval_mod.evaluate_eval_set(records, gen, cls)
         assert results[0]["level"] == "NA"
 
+    def test_classify_runs_concurrently(self):
+        # MLX generation is GPU-bound and must stay sequential, but classify
+        # is I/O-bound (judge HTTP calls) and should run in parallel. With 10
+        # records, each judge call taking 0.5s, sequential would be ~5s and
+        # parallel (workers >= 10) should be ~0.5s. Allow generous slack.
+        import time
+
+        records = [{"complex": f"src{i}"} for i in range(10)]
+        gen = lambda x: f"out({x})"
+
+        def cls(x):
+            time.sleep(0.5)
+            return "A2"
+
+        start = time.time()
+        results = eval_mod.evaluate_eval_set(records, gen, cls, classify_workers=10)
+        elapsed = time.time() - start
+        assert len(results) == 10
+        # All A2
+        assert all(r["level"] == "A2" for r in results)
+        # Concurrent classify: must be substantially less than 10 × 0.5s = 5s
+        assert elapsed < 2.0, f"classify did not parallelize (took {elapsed:.2f}s)"
+
+    def test_preserves_record_order_under_parallel_classify(self):
+        # Parallel classify mustn't shuffle results — the ith result must come
+        # from the ith input record.
+        records = [{"complex": f"src{i}", "title": f"t{i}"} for i in range(20)]
+        gen = lambda x: f"out({x})"
+
+        import random
+        rng = random.Random(0)
+
+        def cls(x):
+            # Random small sleep so workers finish out of order
+            import time
+            time.sleep(rng.random() * 0.05)
+            return "A2"
+
+        results = eval_mod.evaluate_eval_set(records, gen, cls, classify_workers=8)
+        for i, r in enumerate(results):
+            assert r["title"] == f"t{i}"
+            assert r["output"] == f"out(src{i})"
+
 
 class TestSummarize:
     def test_level_distribution(self):

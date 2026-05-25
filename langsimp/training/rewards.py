@@ -483,6 +483,135 @@ class CombinedReward(RewardComponent):
         return max(0.0, min(1.0, total))
 
 
+# ---------- v5 (2026-05-23): entity preservation + multiplicative combined ----------
+#
+# v3 (above) was an additive weighted sum of 6 components. Auditing 25 model
+# outputs against subjective quality revealed two problems:
+#   1. vocab_reward had *negative* Spearman correlation with quality (−0.57).
+#      It punishes outputs that gloss technical terms (a *good* simplification
+#      move) because the gloss adds out-of-top-3000 tokens.
+#   2. repetition_reward and markdown_reward stayed at ~1.0 across all 25
+#      outputs — they never discriminated, just inflated the baseline.
+#
+# v5 changes:
+#   * Drop vocab entirely.
+#   * Convert repetition/markdown to *hard gates* (multiply by 0 when fired).
+#   * Add EntityPreservationReward — % of named entities from source that
+#     appear in output. Strongest new signal we found (+0.57 ρ on held-out).
+#   * base = 0.6 * meaning + 0.4 * entity_preservation
+#   * Difficulty becomes a soft multiplier: A2=1.0, A1=0.85, B1=0.6, B2+=0.0.
+#   * Length stays as an asymmetric multiplier — short is bad (content lost),
+#     slightly long is fine (content preserved with gloss).
+
+
+_ENTITY_RES = [
+    re.compile(r"(?:[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)"),  # CamelCase multi-word
+    re.compile(r"\b[A-Z]{2,}\b"),  # ALL-CAPS acronyms (UCL, MI6, UAV)
+    re.compile(r"\b\d{2,4}\b"),  # years and small counts
+]
+
+
+class EntityPreservationReward(RewardComponent):
+    """Fraction of named entities from the source that survive in the output.
+
+    Entity definition is heuristic: capitalized multi-word phrases, all-caps
+    acronyms ≥2 letters, and 2-4 digit numbers. Single capitalized words are
+    intentionally excluded (sentence-initial false positives). Matching is
+    case-insensitive substring against the output.
+
+    Returns 1.0 when the source has no detected entities (nothing to compare).
+    """
+
+    name = "entity"
+
+    def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
+        ents: set[str] = set()
+        for r in _ENTITY_RES:
+            for m in r.findall(ctx.source):
+                ents.add(m.strip())
+        if not ents:
+            return 1.0
+        out_lower = output.lower()
+        kept = sum(1 for e in ents if e.lower() in out_lower)
+        return kept / len(ents)
+
+
+_V5_DIFF_FACTOR = {"A2": 1.0, "A1": 0.85, "B1": 0.6, "B2+": 0.0, "<A1": 0.5, "NA": 0.0}
+
+
+def _v5_length_factor(source: str, output: str) -> float:
+    """Asymmetric window: [0.8, 1.4] = 1.0, decays to 0 at [0.5, 1.8]."""
+    sw = len(source.split())
+    ow = len(output.split())
+    if sw == 0:
+        return 0.0
+    r = ow / sw
+    if 0.8 <= r <= 1.4:
+        return 1.0
+    if r < 0.5 or r > 1.8:
+        return 0.0
+    if r < 0.8:
+        return (r - 0.5) / 0.3
+    return (1.8 - r) / 0.4
+
+
+def _v5_has_markdown(output: str) -> bool:
+    return any(p.search(output) for p in _MARKDOWN_PATTERNS)
+
+
+def _v5_has_loop(output: str) -> bool:
+    """Fire the gate when RepetitionReward would score < 0.3 (loop or
+    repeated-sentence pattern). Reuses the existing detection."""
+    rep_score = RepetitionReward().compute(output, RewardContext(source=""))
+    return rep_score < 0.3
+
+
+class CombinedRewardV5(RewardComponent):
+    """v5 combined reward: multiplicative gating + asymmetric length factor.
+
+    reward = base * difficulty_factor * length_factor
+    where base = meaning_weight * meaning + entity_weight * entity
+    and the reward is zeroed if:
+      - meaning < meaning_gate (catastrophic faithfulness failure)
+      - output contains markdown
+      - output exhibits loop / repeated-sentence pattern
+    """
+
+    name = "combined_v5"
+
+    def __init__(
+        self,
+        meaning_weight: float = 0.6,
+        entity_weight: float = 0.4,
+        meaning_gate: float = 0.3,
+    ):
+        self.meaning = SemanticPreservationReward()
+        self.entity = EntityPreservationReward()
+        self.meaning_weight = meaning_weight
+        self.entity_weight = entity_weight
+        self.meaning_gate = meaning_gate
+
+    def compute(self, output: str, ctx: RewardContext, judge=None) -> float:
+        meaning = self.meaning.compute(output, ctx, judge=judge)
+        if meaning < self.meaning_gate:
+            return 0.0
+        if _v5_has_markdown(output):
+            return 0.0
+        if _v5_has_loop(output):
+            return 0.0
+        entity = self.entity.compute(output, ctx)
+        base = self.meaning_weight * meaning + self.entity_weight * entity
+        bundle = _judge_bundle(judge, ctx.source, output) if judge else {}
+        lvl = bundle.get("lvl", "NA")
+        diff_factor = _V5_DIFF_FACTOR.get(lvl, 0.5)
+        len_factor = _v5_length_factor(ctx.source, output)
+        return max(0.0, min(1.0, base * diff_factor * len_factor))
+
+
+def _default_combined_v5() -> CombinedRewardV5:
+    return CombinedRewardV5(meaning_weight=0.6, entity_weight=0.4, meaning_gate=0.3)
+
+
 # ---------- mlx_lm_lora @register_reward_function adapters ----------
 #
 # mlx_lm_lora calls reward functions with the signature
@@ -603,6 +732,26 @@ def difficulty_reward(prompts, completions, answer, types=None) -> list[float]:
 def markdown_reward(prompts, completions, answer, types=None) -> list[float]:
     return [
         _MARKDOWN.compute(c, RewardContext(source=p, answer=a))
+        for p, c, a in zip(prompts, completions, answer, strict=True)
+    ]
+
+
+_COMBINED_V5 = _default_combined_v5()
+
+
+@register_reward_function()
+def v5_combined_reward(prompts, completions, answer, types=None) -> list[float]:
+    """v5 stack as a single reward function. Use with
+    `--reward-functions v5_combined_reward --reward-weights [1.0]`.
+
+    Internally:
+      base = 0.6 * meaning + 0.4 * entity_preservation
+      then multiplied by difficulty_factor and length_factor.
+    Gated to 0 on meaning<0.3, markdown present, or repetition/loop.
+    """
+    judge = _get_judge()
+    return [
+        _COMBINED_V5.compute(c, RewardContext(source=p, answer=a), judge=judge)
         for p, c, a in zip(prompts, completions, answer, strict=True)
     ]
 

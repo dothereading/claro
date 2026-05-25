@@ -34,3 +34,7 @@ Keep tests close to the code they exercise. Prefer small, focused tests over lar
 - Shell wrappers around existing tools (e.g. `train_*.sh`)
 
 If unsure whether something needs tests, ask.
+
+## Smoke-test before long runs
+
+For any job expected to run more than ~10 minutes, do a 1–2 iteration / few-record version first and look at the outputs. Confirm the basics — values are real, generated text looks right — before committing to the full run.
