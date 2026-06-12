@@ -195,3 +195,82 @@ call (style/A2-ness) and a fact-by-fact analysis call (faithfulness), and
 combines them. Each sub-call is easier to verify than the joint
 "is this output good?" question — Wei's asymmetry-of-verification idea
 applied at the reward-component level.
+
+## Investigation 3: v7 GRPO — making the trainer work, then learning the reward was misaimed (2026-06)
+
+### mlx-lm-lora's GRPO has two latent bugs for Gemma
+
+**FP16 logits cast NaN's gradients.** `grpo_trainer.py:92` does
+`logits = model(inputs).astype(mx.float16)`. Gemma's vocab is 256K; with
+BF16 weights and any training that pushes a logit above FP16's max
+(~65504), the cast yields `inf`, then `nn.log_softmax(inf) → NaN`, then
+NaN propagates into `log_ratio → loss → gradient`. Symptom: v7 GRPO at
+G=8 NaN'd by iter ~15 regardless of lr or importance-sampling level.
+Fix: patch to `.astype(mx.float32)` — see `scripts/patch_mlx_lm_lora.sh`.
+
+**Default `--importance-sampling-level=token` NaN's earlier than
+`sequence` (GSPO).** Per-token importance weights amplify any
+per-token log-prob outlier; sequence-averaged weights tolerate the
+same outliers. Both eventually fail without the FP32 patch, but
+sequence-level survives ~10 iters longer in our setup. With FP32 patch
+applied, sequence-level is the only one that trains stably for 100+
+iters.
+
+### Offline ranker validation doesn't predict online training utility
+
+The v7 sparse-geometric ranker validated cleanly offline: Spearman ρ
+= +0.87 vs subjective rank, hallucinated outputs always last, top-1
+agreement 4/6 across 3 examples × 2 calls (round 2 prompt: top-4 set
+agreement 11/12). And online training was stable: μ=0.229, σ=0.329,
+cov=100% throughout 100 iters. But the trained adapter underperformed
+its SFT base by −20pp on strict A2 hit-rate (80-prompt eval, 68% → 48%).
+
+The mechanism: v7 rewarded "faithfulness" (preserve named entities,
+specific terms) and "shorter is better when faithful" simultaneously.
+Together those two pushed outputs into B1 register — dense sentences
+that pack 2-3 specific terms each. The reward shape was internally
+consistent and the trainer learned to maximize it; the reward shape
+itself just didn't aim at A2.
+
+### Sample size on the eval matters more than I assumed
+
+The same adapter pair (sft_n750, grpo_v7) measured at n=30 vs n=80:
+- n=30: GRPO +14pp on A2 (40% → 54%)
+- n=80: GRPO −20pp on A2 (68% → 48%)
+
+The first 30 prompts in `eval.jsonl` happened to be the ones where
+SFT struggles and GRPO recovers; the broader 80 reveals the
+generic-case regression. Lesson: a 30-prompt eval can flip directionally
+between adapters. Run 80 minimum before committing to a training
+direction.
+
+### Strict-A2 may be the wrong target — A2-or-B1 reframes the result
+
+Under "strict A2 only" the SFT model wins 68% vs 48%. Under "A2 OR
+B1 acceptable" (i.e. readable + factually preserved, B1 vocab tolerated)
+the GRPO model wins 80% vs 84%. The difference matters because:
+
+- A1 outputs (over-simplified) destroy source information — "Carver
+  is a powerful businessman" instead of "media mogul"; "Each stalk
+  has six petals" instead of "four petals, four sepals".
+- B1 outputs (dense vocab) preserve information but ask more of the
+  reader.
+
+For most A2-simplification use cases (an A2 learner reading general
+content), preserving facts at B1 vocab beats destroying them at A1.
+The 1B SFT model's 20% A1 share is hidden tax — that 20% is outputs
+where the source's value got lost. v7 trades 4pp of that for an extra
+24pp of B1; net +4pp on "readable+faithful" but −20pp on the
+classifier's strict A2 bucket.
+
+### DeepSeek judges hang in GRPO training context, Haiku doesn't
+
+`deepseek/deepseek-v4-pro:gmicloud/fp8` (and `deepseek-v4-flash`,
+and bare `deepseek-v4-pro`) work fine for offline batch evaluation
+(`check_v7_stability.py`, `eval_harness`) but consistently hang on
+the first judge call inside an mlx-lm-lora training process —
+SSL socket `poll()` stuck until our 45-180s timeout fires. Likely
+DeepSeek's reasoning-model output takes >timeout for an 8-candidate
+ranking prompt that's ~1500 words. Haiku-4.5 returns in ~5s for
+the same prompt and trains reliably. Workhorse for training =
+Haiku; gold-standard for evaluation = DeepSeek.

@@ -445,6 +445,8 @@ def _sft(args: argparse.Namespace) -> int:
         str(args.steps_per_eval),
         "--steps-per-report",
         str(args.steps_per_report),
+        "--save-every",
+        str(args.save_every),
         "--grad-checkpoint",
     ]
     config = {
@@ -574,6 +576,8 @@ def _grpo(args: argparse.Namespace) -> int:
         str(args.temperature),
         "--max-completion-length",
         str(args.max_completion_length),
+        "--importance-sampling-level",
+        args.importance_sampling_level,
         "--val-batches",
         str(args.val_batches),
         "--steps-per-eval",
@@ -596,6 +600,7 @@ def _grpo(args: argparse.Namespace) -> int:
         "group_size": args.group_size,
         "temperature": args.temperature,
         "max_completion_length": args.max_completion_length,
+        "importance_sampling_level": args.importance_sampling_level,
         "reward_functions": args.reward_functions,
         "reward_weights": args.reward_weights,
         "dataset_hash": dataset_hash(Path(args.data)),
@@ -634,6 +639,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sft.add_argument("--val-batches", type=int, default=5)
     sft.add_argument("--steps-per-eval", type=int, default=50)
     sft.add_argument("--steps-per-report", type=int, default=10)
+    sft.add_argument("--save-every", type=int, default=100,
+                     help="checkpoint cadence; set to match steps-per-eval to capture every val")
     sft.add_argument("--project", default="lang-simp-sft")
 
     dpo = sub.add_parser("dpo", help="LoRA DPO via mlx-lm-lora with W&B logging")
@@ -705,6 +712,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="rollout sampling temperature; higher = more reward variety per group",
     )
     grpo.add_argument("--max-completion-length", type=int, default=512)
+    grpo.add_argument(
+        "--importance-sampling-level",
+        default="token",
+        choices=["token", "sequence"],
+        help=(
+            "MUST be set. mlx-lm-lora defaults this to None, which sets "
+            "log_importance_weights = zeros_like(log_ratio) and zeroes the "
+            "policy-improvement gradient — the LoRA never moves and KL stays "
+            "exactly 0. 'token' restores the standard per-token GRPO objective."
+        ),
+    )
     grpo.add_argument("--iters", type=int, default=200)
     grpo.add_argument("--batch-size", type=int, default=1)
     grpo.add_argument("--lr", type=float, default=1e-6)

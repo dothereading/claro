@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from abc import ABC, abstractmethod
 from collections import Counter
 from typing import Any
@@ -86,14 +87,32 @@ class LocalJudge(BaseJudge):
             "temperature": self.temperature,
         }
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
-        try:
-            response = requests.post(self.endpoint, json=payload, headers=headers, timeout=180)
-            response.raise_for_status()
-            raw_content = response.json()["choices"][0]["message"]["content"]
-            return self._parse_json(raw_content)
-        except Exception as e:
-            print(f"Error communicating with judge at {self.endpoint}: {e}")
-            return {"error": str(e)}
+
+        # Transient errors (read timeouts, 5xx, connection resets) shouldn't zero
+        # a whole GRPO group — retry up to 3× with backoff before giving up.
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=45)
+                response.raise_for_status()
+                raw_content = response.json()["choices"][0]["message"]["content"]
+                return self._parse_json(raw_content)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_err = e
+            except requests.HTTPError as e:
+                # Only retry on 5xx; 4xx is our fault and won't get better.
+                if 500 <= getattr(e.response, "status_code", 0) < 600:
+                    last_err = e
+                else:
+                    return {"error": str(e)}
+            except Exception as e:
+                # Includes JSONDecodeError from _parse_json — non-transient,
+                # the next call won't fix it.
+                return {"error": str(e)}
+            time.sleep(2 ** attempt)
+
+        print(f"Error communicating with judge at {self.endpoint}: {last_err}")
+        return {"error": str(last_err)}
 
     def _parse_json(self, content: str) -> dict[str, Any]:
         content = content.strip()
@@ -101,13 +120,17 @@ class LocalJudge(BaseJudge):
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
-        # Fallback: extract first {...} block.
+        # Fallback: extract first {...} or [...] block. The bare-array path is
+        # for verifiers like v7's GroupRankReward that ask for a JSON array.
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            m = re.search(r"\{.*\}", content, re.DOTALL)
-            if m:
-                return json.loads(m.group(0))
+            obj = re.search(r"\{.*\}", content, re.DOTALL)
+            if obj:
+                return json.loads(obj.group(0))
+            arr = re.search(r"\[.*\]", content, re.DOTALL)
+            if arr:
+                return json.loads(arr.group(0))
             raise
 
 

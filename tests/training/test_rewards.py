@@ -784,3 +784,626 @@ class TestCombinedRewardV5:
         # Length should be full credit; only the meaning + entity drives
         assert s >= 0.5  # broad floor; depends on entity match on token-soup
 
+
+# ---------- v6: 8-axis fidelity + per-group A2-ranking ----------
+
+
+rewards_v6 = pytest.importorskip(
+    "langsimp.training.rewards_v6", reason="rewards_v6.py not implemented yet (RED)"
+)
+
+
+class V6StubJudge(BaseJudge):
+    """Dispatches on prompt header. The fidelity prompt starts with
+    "You are auditing"; the rank prompt starts with "You are ranking".
+    Each branch returns the preset response and records the call so
+    tests can assert call counts."""
+
+    FIDELITY_MARKER = "auditing a text simplification"
+    RANK_MARKER = "ranking text simplifications"
+
+    def __init__(self, fidelity_response: dict | None = None, rank_response: dict | None = None):
+        self.fidelity_response = fidelity_response if fidelity_response is not None else {
+            "n_source_claims": 1,
+            "missing_full": 0,
+        }
+        self.rank_response = rank_response if rank_response is not None else {"order": [0]}
+        self.fidelity_calls: list[str] = []
+        self.rank_calls: list[str] = []
+
+    def evaluate(self, prompt: str) -> dict:
+        if self.FIDELITY_MARKER in prompt:
+            self.fidelity_calls.append(prompt)
+            return self.fidelity_response
+        if self.RANK_MARKER in prompt:
+            self.rank_calls.append(prompt)
+            return self.rank_response
+        raise AssertionError(f"V6StubJudge: unrecognized prompt header: {prompt[:80]!r}")
+
+
+@pytest.fixture(autouse=True)
+def _clear_v6_fidelity_cache():
+    """Each test starts with an empty fidelity cache so cache state doesn't
+    leak across tests (the cache lives at module scope)."""
+    rewards_v6._fidelity_cache.clear()
+    yield
+    rewards_v6._fidelity_cache.clear()
+
+
+class TestFidelityReward:
+    def _ctx(self, source: str = "src"):
+        return rewards.RewardContext(source=source)
+
+    def test_zero_errors_gives_full_credit(self):
+        judge = V6StubJudge(
+            fidelity_response={
+                "n_source_claims": 5,
+                "missing_full": 0, "missing_specificity": 0, "missing_nuance": 0,
+                "hallucinated": 0, "off_topic": 0,
+                "factuality_distorted": 0, "fidelity_major": 0, "fidelity_minor": 0,
+            }
+        )
+        r = rewards_v6.FidelityReward()
+        assert r.compute("out", self._ctx(), judge=judge) == pytest.approx(1.0)
+
+    def test_all_claims_missing_gives_zero(self):
+        # 3 claims × weight 4 = 12; max = 4*3 = 12 → 1 - 12/12 = 0
+        judge = V6StubJudge(
+            fidelity_response={"n_source_claims": 3, "hallucinated": 3}
+        )
+        r = rewards_v6.FidelityReward()
+        assert r.compute("out", self._ctx(), judge=judge) == pytest.approx(0.0)
+
+    def test_each_error_type_contributes_its_weight(self):
+        # n_claims=10 → max_errors=40. Each axis below contributes 1*weight.
+        cases = {
+            "missing_full": 2,
+            "missing_specificity": 1,
+            "missing_nuance": 2,
+            "hallucinated": 4,
+            "off_topic": 1,
+            "factuality_distorted": 4,
+            "fidelity_major": 3,
+            "fidelity_minor": 1,
+        }
+        for axis, weight in cases.items():
+            judge = V6StubJudge(
+                fidelity_response={"n_source_claims": 10, axis: 1}
+            )
+            r = rewards_v6.FidelityReward()
+            expected = 1.0 - weight / 40
+            got = r.compute("out", self._ctx(source=f"src-{axis}"), judge=judge)
+            assert got == pytest.approx(expected), f"{axis}: got {got}, expected {expected}"
+
+    def test_malformed_judge_response_returns_neutral(self):
+        judge = V6StubJudge(fidelity_response={"unrelated": "junk"})
+        r = rewards_v6.FidelityReward()
+        # Missing n_source_claims → neutral 0.5
+        assert r.compute("out", self._ctx(), judge=judge) == pytest.approx(0.5)
+
+    def test_zero_source_claims_gives_full_credit(self):
+        judge = V6StubJudge(fidelity_response={"n_source_claims": 0})
+        r = rewards_v6.FidelityReward()
+        assert r.compute("out", self._ctx(), judge=judge) == pytest.approx(1.0)
+
+    def test_caches_per_source_output_pair(self):
+        judge = V6StubJudge(fidelity_response={"n_source_claims": 1, "missing_full": 0})
+        r = rewards_v6.FidelityReward()
+        r.compute("output A", self._ctx(source="src"), judge=judge)
+        r.compute("output A", self._ctx(source="src"), judge=judge)
+        # Second compute on same (source, output) hits cache, no second call
+        assert len(judge.fidelity_calls) == 1
+        # Different output → new call
+        r.compute("output B", self._ctx(source="src"), judge=judge)
+        assert len(judge.fidelity_calls) == 2
+
+    def test_no_judge_returns_neutral(self):
+        r = rewards_v6.FidelityReward()
+        assert r.compute("out", self._ctx(), judge=None) == pytest.approx(0.5)
+
+    def test_judge_exception_returns_neutral(self):
+        class BoomJudge(BaseJudge):
+            def evaluate(self, prompt):
+                raise RuntimeError("transport boom")
+
+        r = rewards_v6.FidelityReward()
+        assert r.compute("out", self._ctx(), judge=BoomJudge()) == pytest.approx(0.5)
+
+
+class TestGroupRankReward:
+    def test_valid_ranking_returns_linear_spread(self):
+        # order [0,1,2,3] → rollout 0 is best, rollout 3 is worst
+        judge = V6StubJudge(rank_response={"order": [0, 1, 2, 3]})
+        r = rewards_v6.GroupRankReward()
+        scores = r.compute_group("src", ["a", "b", "c", "d"], judge=judge)
+        assert scores == pytest.approx([1.0, 2 / 3, 1 / 3, 0.0])
+
+    def test_permuted_ranking_assigns_scores_by_id(self):
+        # rollout id 3 ranked best, id 0 ranked worst
+        judge = V6StubJudge(rank_response={"order": [3, 1, 2, 0]})
+        r = rewards_v6.GroupRankReward()
+        scores = r.compute_group("src", ["w", "x", "y", "z"], judge=judge)
+        # By position: id 0 has rank 3 → 0.0; id 3 has rank 0 → 1.0
+        assert scores[0] == pytest.approx(0.0)
+        assert scores[3] == pytest.approx(1.0)
+        assert scores[1] == pytest.approx(2 / 3)
+        assert scores[2] == pytest.approx(1 / 3)
+
+    def test_malformed_response_falls_back_to_neutral(self):
+        judge = V6StubJudge(rank_response={"garbage": True})
+        r = rewards_v6.GroupRankReward()
+        scores = r.compute_group("src", ["a", "b", "c"], judge=judge)
+        assert scores == [0.5, 0.5, 0.5]
+
+    def test_missing_ids_in_order_falls_back(self):
+        # Length matches G=3 but has dup + missing id 2
+        judge = V6StubJudge(rank_response={"order": [0, 1, 1]})
+        r = rewards_v6.GroupRankReward()
+        scores = r.compute_group("src", ["a", "b", "c"], judge=judge)
+        assert scores == [0.5, 0.5, 0.5]
+
+    def test_single_rollout_returns_one(self):
+        judge = V6StubJudge(rank_response={"order": [0]})
+        r = rewards_v6.GroupRankReward()
+        # G=1: no judge call needed; we short-circuit to [1.0]
+        assert r.compute_group("src", ["only"], judge=judge) == [1.0]
+        assert judge.rank_calls == []
+
+    def test_group_of_eight_gives_linear_spread(self):
+        judge = V6StubJudge(rank_response={"order": [3, 0, 7, 1, 5, 2, 6, 4]})
+        r = rewards_v6.GroupRankReward()
+        outputs = [f"o{i}" for i in range(8)]
+        scores = r.compute_group("src", outputs, judge=judge)
+        # Verify scores span [0, 1] linearly and are unique
+        assert min(scores) == pytest.approx(0.0)
+        assert max(scores) == pytest.approx(1.0)
+        assert len(set(scores)) == 8
+        # Spot-check: id 3 ranked first → score 1.0; id 4 ranked last → 0.0
+        assert scores[3] == pytest.approx(1.0)
+        assert scores[4] == pytest.approx(0.0)
+
+    def test_no_judge_returns_all_neutral(self):
+        r = rewards_v6.GroupRankReward()
+        assert r.compute_group("src", ["a", "b"], judge=None) == [0.5, 0.5]
+
+
+class TestCombinedRewardV6:
+    """End-to-end behavior of the multiplicative combined reward.
+
+    Source paragraphs are sized so length_factor is ~1.0 by default
+    (output ≈ source word count). We tweak length and content for the
+    specific edge cases."""
+
+    # 20-word source with enough lexical variety not to trigger the loop gate
+    # (which fires when the distinct-4gram ratio drops below 0.55).
+    SRC = (
+        "The library opened in 1934 and stood near the river for many years. "
+        "Many people visited it during quiet afternoons throughout autumn."
+    )
+    GOOD_OUT = (
+        "A library opened in 1934 and stood near the river for many years. "
+        "Many readers visited it on quiet afternoons each autumn season."
+    )
+
+    HIGH_FID = {
+        "n_source_claims": 5,
+        "missing_full": 0, "missing_specificity": 0, "missing_nuance": 0,
+        "hallucinated": 0, "off_topic": 0,
+        "factuality_distorted": 0, "fidelity_major": 0, "fidelity_minor": 0,
+    }
+
+    def test_clean_output_high_fidelity_top_rank_gives_near_one(self):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0, 1]},
+        )
+        r = rewards_v6._default_combined_v6()
+        scores = r.compute_group(self.SRC, [self.GOOD_OUT, self.GOOD_OUT], judge=judge)
+        # rollout 0 ranked best: base = 0.5*1.0 + 0.5*1.0 = 1.0
+        # length_factor ≈ 1.0 (output is 23 / source 22 words), gate = 1.0
+        assert scores[0] == pytest.approx(1.0, abs=0.02)
+
+    def test_markdown_detected_zeros_reward(self):
+        markdown_out = "**bold word** " + self.GOOD_OUT
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0]},
+        )
+        r = rewards_v6._default_combined_v6()
+        scores = r.compute_group(self.SRC, [markdown_out], judge=judge)
+        assert scores == [0.0]
+
+    def test_loop_detected_zeros_reward(self):
+        # Repeated sentence pattern fires _v5_has_loop
+        looped = "The cat sat on the mat. The cat sat on the mat. The cat sat on the mat."
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0]},
+        )
+        r = rewards_v6._default_combined_v6()
+        # Use a source matching length so the length factor doesn't already kill it
+        src = " ".join(["w"] * len(looped.split()))
+        scores = r.compute_group(src, [looped], judge=judge)
+        assert scores == [0.0]
+
+    def test_very_short_output_zeroes_length_factor(self):
+        # ratio ~ 1/20 = 0.05 → exp(-(0.05-1)^2 / 0.32) ≈ exp(-2.82) ≈ 0.06
+        # Plenty small once multiplied through. Tight ceiling here.
+        short = "tiny"
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0]},
+        )
+        r = rewards_v6._default_combined_v6()
+        scores = r.compute_group(self.SRC, [short], judge=judge)
+        assert scores[0] < 0.1
+
+    def test_slightly_long_output_retains_most_reward(self):
+        # ratio ≈ 1.3 with sigma=0.4: exp(-0.09/0.32) ≈ 0.755
+        # NOTE: V6 spec text claims this should be "≈ same as ratio=1.0",
+        # but with the spec's σ=0.4 the gaussian is sharper than that.
+        # This test pins the actual behavior; raise σ if the comment-vs-code
+        # mismatch is resolved later.
+        # SRC is 22 words; GOOD_OUT is 23; appended phrase is 6 → 29 → ratio ≈ 1.32.
+        slightly_long = self.GOOD_OUT + " A garden bloomed each spring."
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0]},
+        )
+        r = rewards_v6._default_combined_v6()
+        scores = r.compute_group(self.SRC, [slightly_long], judge=judge)
+        # Full base = 1.0, length factor drops with ratio; should retain >0.5
+        assert 0.5 < scores[0] < 0.9
+
+    def test_soft_fidelity_floor_attenuates_high_rank_low_fidelity(self):
+        # fidelity ≈ 0.15: with n_claims=10, weighted_errors ≈ 34
+        # Try n_claims=10, factuality_distorted=8 → 32/40 → fidelity = 0.2 (boundary)
+        # Use n_claims=5, hallucinated=4 → 16/20 → fidelity = 0.2 — at the floor.
+        # We want STRICTLY < 0.2: hallucinated=4, off_topic=1 with n=5 → 17/20 → 0.15
+        low_fid = {
+            "n_source_claims": 5,
+            "hallucinated": 4,
+            "off_topic": 1,
+        }
+        judge = V6StubJudge(
+            fidelity_response=low_fid,
+            rank_response={"order": [0]},
+        )
+        r = rewards_v6._default_combined_v6()
+        scores = r.compute_group(self.SRC, [self.GOOD_OUT], judge=judge)
+        # Unattenuated base = 0.5*0.15 + 0.5*1.0 = 0.575; length ≈ 1.0
+        # Attenuated: 0.575 * 0.2 = 0.115
+        assert scores[0] == pytest.approx(0.115, abs=0.01)
+
+    def test_output_order_preserved_in_compute_group(self):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [2, 0, 1]},
+        )
+        r = rewards_v6._default_combined_v6()
+        outputs = [self.GOOD_OUT + " a", self.GOOD_OUT + " b", self.GOOD_OUT + " c"]
+        scores = r.compute_group(self.SRC, outputs, judge=judge)
+        assert len(scores) == 3
+        # id 2 ranked best → highest score; id 1 ranked last → lowest
+        assert scores[2] > scores[0] > scores[1]
+
+    def test_compute_group_returns_g_floats_for_g_outputs(self):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": list(range(5))},
+        )
+        r = rewards_v6._default_combined_v6()
+        outputs = [self.GOOD_OUT for _ in range(5)]
+        scores = r.compute_group(self.SRC, outputs, judge=judge)
+        assert len(scores) == 5
+        assert all(isinstance(s, float) for s in scores)
+        assert all(0.0 <= s <= 1.0 for s in scores)
+
+    def test_compute_single_uses_rank_one(self):
+        # Offline-audit path: rank_score is implicitly 1.0
+        judge = V6StubJudge(fidelity_response=self.HIGH_FID)
+        r = rewards_v6._default_combined_v6()
+        s = r.compute(self.GOOD_OUT, rewards.RewardContext(source=self.SRC), judge=judge)
+        # base = 0.5*1.0 + 0.5*1.0 = 1.0, length ≈ 1.0
+        assert s == pytest.approx(1.0, abs=0.02)
+
+
+class TestV6RegisteredFunction:
+    """The mlx-lm-lora entry point. Group detection walks contiguous runs
+    of identical prompts. We monkeypatch `_get_judge` so the function
+    talks to our stub instead of needing OPENROUTER env."""
+
+    HIGH_FID = TestCombinedRewardV6.HIGH_FID
+
+    def test_batch_two_group_two_runs_two_rank_calls(self, monkeypatch):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0, 1]},
+        )
+        monkeypatch.setattr(rewards_v6, "_get_judge", lambda: judge)
+        out = rewards_v6.v6_combined_reward(
+            prompts=["src1", "src1", "src2", "src2"],
+            completions=["a", "b", "c", "d"],
+            answer=["", "", "", ""],
+            types=None,
+        )
+        assert len(out) == 4
+        # 2 groups → 2 rank calls; 4 unique (source, output) pairs → 4 fidelity calls
+        assert len(judge.rank_calls) == 2
+        assert len(judge.fidelity_calls) == 4
+
+    def test_batch_one_group_four_runs_one_rank_call(self, monkeypatch):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0, 1, 2, 3]},
+        )
+        monkeypatch.setattr(rewards_v6, "_get_judge", lambda: judge)
+        out = rewards_v6.v6_combined_reward(
+            prompts=["src1"] * 4,
+            completions=["a", "b", "c", "d"],
+            answer=[""] * 4,
+            types=None,
+        )
+        assert len(out) == 4
+        assert len(judge.rank_calls) == 1
+        assert len(judge.fidelity_calls) == 4
+
+    def test_result_length_matches_completions(self, monkeypatch):
+        judge = V6StubJudge(
+            fidelity_response=self.HIGH_FID,
+            rank_response={"order": [0, 1, 2]},
+        )
+        monkeypatch.setattr(rewards_v6, "_get_judge", lambda: judge)
+        # Batch=2 with G=3
+        out = rewards_v6.v6_combined_reward(
+            prompts=["s1", "s1", "s1", "s2", "s2", "s2"],
+            completions=["a", "b", "c", "d", "e", "f"],
+            answer=[""] * 6,
+            types=None,
+        )
+        assert len(out) == 6
+        assert all(isinstance(x, float) for x in out)
+
+    def test_group_detection_runs(self):
+        # Pure helper test, no judge needed
+        runs = rewards_v6._group_runs(["a", "a", "b", "b", "c"])
+        assert runs == [(0, 2), (2, 4), (4, 5)]
+        assert rewards_v6._group_runs([]) == []
+        assert rewards_v6._group_runs(["only"]) == [(0, 1)]
+
+
+# ---------- v7: sparse-geometric ranking, no fidelity ----------
+
+
+rewards_v7 = pytest.importorskip(
+    "langsimp.training.rewards_v7", reason="rewards_v7.py not implemented yet (RED)"
+)
+
+
+class V7StubJudge(BaseJudge):
+    """One prompt type only. Asserts the prompt is the v7 ranking prompt
+    and returns whatever `reply` was configured (list, dict, or string)."""
+
+    def __init__(self, reply: Any = None):
+        self.reply = reply
+        self.calls: list[str] = []
+
+    def evaluate(self, prompt: str) -> Any:
+        assert rewards_v7._RANK_PROMPT_MARKER in prompt, (
+            f"V7StubJudge: prompt missing v7 marker: {prompt[:80]!r}"
+        )
+        self.calls.append(prompt)
+        return self.reply
+
+
+class TestScoreRanksSparse:
+    def test_g8_default_top4_geometric(self):
+        # rank 0 → 1.0, rank 1 → 0.5, rank 2 → 0.25, rank 3 → 0.125, rest 0
+        scores = rewards_v7._score_ranks_sparse([0, 1, 2, 3, 4, 5, 6, 7], 8)
+        assert scores == pytest.approx([1.0, 0.5, 0.25, 0.125, 0.0, 0.0, 0.0, 0.0])
+
+    def test_permuted_order_scores_by_id(self):
+        # rollout id 3 ranked best, id 0 ranked second, ...
+        scores = rewards_v7._score_ranks_sparse([3, 0, 5, 1, 7, 2, 4, 6], 8)
+        assert scores[3] == pytest.approx(1.0)
+        assert scores[0] == pytest.approx(0.5)
+        assert scores[5] == pytest.approx(0.25)
+        assert scores[1] == pytest.approx(0.125)
+        # The four rollouts ranked 4-7 are all zero
+        for rid in (7, 2, 4, 6):
+            assert scores[rid] == 0.0
+
+    def test_g4_default_top2(self):
+        scores = rewards_v7._score_ranks_sparse([0, 1, 2, 3], 4)
+        assert scores == pytest.approx([1.0, 0.5, 0.0, 0.0])
+
+    def test_g1_returns_single_one(self):
+        assert rewards_v7._score_ranks_sparse([0], 1) == [1.0]
+
+    def test_custom_base(self):
+        # base=0.25 → 1.0, 0.25, 0.0625, 0.015625, 0, ...
+        scores = rewards_v7._score_ranks_sparse([0, 1, 2, 3, 4, 5, 6, 7], 8, base=0.25)
+        assert scores[0] == pytest.approx(1.0)
+        assert scores[1] == pytest.approx(0.25)
+        assert scores[2] == pytest.approx(0.0625)
+        assert scores[3] == pytest.approx(0.015625)
+
+    def test_custom_k(self):
+        # k=1 = winner-take-all
+        scores = rewards_v7._score_ranks_sparse([3, 0, 1, 2], 4, k=1)
+        assert scores[3] == 1.0
+        for rid in (0, 1, 2):
+            assert scores[rid] == 0.0
+
+
+class TestParseRankList:
+    def test_valid_list(self):
+        assert rewards_v7._parse_rank_list([3, 0, 5, 1, 7, 2, 4, 6], 8) == [3, 0, 5, 1, 7, 2, 4, 6]
+
+    def test_v6_style_dict_with_order_key(self):
+        assert rewards_v7._parse_rank_list({"order": [0, 1, 2, 3]}, 4) == [0, 1, 2, 3]
+
+    def test_string_with_digits(self):
+        # Pulled from a dict's "error" payload (recovery path)
+        assert rewards_v7._parse_rank_list({"error": "garbled... 3 0 5 1 7 2 4 6 ..."}, 8) == [
+            3, 0, 5, 1, 7, 2, 4, 6
+        ]
+
+    def test_wrong_length(self):
+        assert rewards_v7._parse_rank_list([0, 1, 2], 4) is None
+
+    def test_duplicate_ids(self):
+        assert rewards_v7._parse_rank_list([0, 1, 1, 2], 4) is None
+
+    def test_out_of_range_ids(self):
+        assert rewards_v7._parse_rank_list([0, 1, 2, 9], 4) is None
+
+    def test_non_list_non_dict(self):
+        assert rewards_v7._parse_rank_list(42, 4) is None
+
+    def test_empty_dict(self):
+        assert rewards_v7._parse_rank_list({}, 4) is None
+
+
+class TestSparseRankReward:
+    def test_valid_ranking_gives_geometric(self):
+        judge = V7StubJudge(reply=[3, 0, 5, 1, 7, 2, 4, 6])
+        r = rewards_v7.SparseRankReward()
+        outputs = [f"o{i}" for i in range(8)]
+        scores = r.compute_group("src", outputs, judge=judge)
+        assert scores[3] == pytest.approx(1.0)
+        assert scores[0] == pytest.approx(0.5)
+        assert scores[5] == pytest.approx(0.25)
+        assert scores[1] == pytest.approx(0.125)
+        # Bottom four all zero
+        assert sum(1 for s in scores if s == 0.0) == 4
+
+    def test_one_judge_call_per_group(self):
+        judge = V7StubJudge(reply=[0, 1, 2, 3])
+        r = rewards_v7.SparseRankReward()
+        r.compute_group("src", ["a", "b", "c", "d"], judge=judge)
+        assert len(judge.calls) == 1
+
+    def test_malformed_falls_back_to_zero(self):
+        judge = V7StubJudge(reply={"garbage": True})
+        r = rewards_v7.SparseRankReward()
+        scores = r.compute_group("src", ["a", "b", "c", "d"], judge=judge)
+        assert scores == [0.0, 0.0, 0.0, 0.0]
+
+    def test_single_rollout_short_circuits(self):
+        judge = V7StubJudge(reply=[0])
+        r = rewards_v7.SparseRankReward()
+        assert r.compute_group("src", ["only"], judge=judge) == [1.0]
+        assert judge.calls == []  # no call needed
+
+    def test_no_judge_returns_all_zero(self):
+        r = rewards_v7.SparseRankReward()
+        assert r.compute_group("src", ["a", "b"], judge=None) == [0.0, 0.0]
+
+    def test_judge_exception_returns_zero(self):
+        class BoomJudge(BaseJudge):
+            def evaluate(self, prompt):
+                raise RuntimeError("transport boom")
+
+        r = rewards_v7.SparseRankReward()
+        assert r.compute_group("src", ["a", "b"], judge=BoomJudge()) == [0.0, 0.0]
+
+    def test_prompt_includes_source_and_candidates(self):
+        judge = V7StubJudge(reply=[0, 1])
+        r = rewards_v7.SparseRankReward()
+        r.compute_group("my source paragraph", ["candidate one", "candidate two"], judge=judge)
+        assert "my source paragraph" in judge.calls[0]
+        assert "[0] candidate one" in judge.calls[0]
+        assert "[1] candidate two" in judge.calls[0]
+
+
+class TestCombinedRewardV7:
+    # 20-word source (same as v6 tests so we know length_factor is ~1.0)
+    SRC = (
+        "The library opened in 1934 and stood near the river for many years. "
+        "Many people visited it during quiet afternoons throughout autumn."
+    )
+    GOOD_OUT = (
+        "A library opened in 1934 and stood near the river for many years. "
+        "Many readers visited it on quiet afternoons each autumn season."
+    )
+
+    def test_winner_gets_full_reward(self):
+        # G=4, default k=2: rollout 0 ranked best, rollout 1 second
+        judge = V7StubJudge(reply=[0, 1, 2, 3])
+        c = rewards_v7.CombinedRewardV7()
+        scores = c.compute_group(self.SRC, [self.GOOD_OUT] * 4, judge=judge)
+        # rank 0 → 1.0, rank 1 → 0.5; length ≈ 1.0, gate = 1.0
+        assert scores[0] == pytest.approx(1.0, abs=0.05)
+        assert scores[1] == pytest.approx(0.5, abs=0.05)
+        # Bottom half zero
+        assert scores[2] == 0.0
+        assert scores[3] == 0.0
+
+    def test_markdown_gate_zeros_reward(self):
+        # G=4 so the 2nd-ranked rollout also has a nonzero rank score
+        judge = V7StubJudge(reply=[0, 1, 2, 3])
+        c = rewards_v7.CombinedRewardV7()
+        # Rollout 0 has markdown → gate=0, reward=0 even though ranked best
+        outs = ["**bold** " + self.GOOD_OUT, self.GOOD_OUT, self.GOOD_OUT, self.GOOD_OUT]
+        scores = c.compute_group(self.SRC, outs, judge=judge)
+        assert scores[0] == 0.0
+        assert scores[1] > 0.0  # rank 1 → 0.5 base
+
+    def test_length_factor_attenuates(self):
+        judge = V7StubJudge(reply=[0, 1, 2, 3])
+        c = rewards_v7.CombinedRewardV7()
+        # Rollout 0 is extremely short — length factor pulls it way down
+        outs = ["hi", self.GOOD_OUT, self.GOOD_OUT, self.GOOD_OUT]
+        scores = c.compute_group(self.SRC, outs, judge=judge)
+        # Even ranked best, the length penalty crushes it
+        assert scores[0] < 0.2
+
+    def test_bottom_half_zero(self):
+        judge = V7StubJudge(reply=[0, 1, 2, 3, 4, 5, 6, 7])
+        c = rewards_v7.CombinedRewardV7()
+        outs = [self.GOOD_OUT] * 8
+        scores = c.compute_group(self.SRC, outs, judge=judge)
+        # Top 4 nonzero, bottom 4 zero
+        assert sum(1 for s in scores if s > 0) == 4
+        assert sum(1 for s in scores if s == 0) == 4
+
+
+class TestV7RegisteredFunction:
+    def test_batch_two_group_two_runs_two_judge_calls(self, monkeypatch):
+        judge = V7StubJudge(reply=[0, 1])
+        monkeypatch.setattr(rewards_v7, "_get_judge", lambda: judge)
+        out = rewards_v7.v7_sparse_rank_reward(
+            prompts=["src1", "src1", "src2", "src2"],
+            completions=["a", "b", "c", "d"],
+            answer=["", "", "", ""],
+            types=None,
+        )
+        assert len(out) == 4
+        # 2 groups → 2 judge calls (no per-rollout calls, unlike v6)
+        assert len(judge.calls) == 2
+
+    def test_g8_single_group_one_call(self, monkeypatch):
+        judge = V7StubJudge(reply=[0, 1, 2, 3, 4, 5, 6, 7])
+        monkeypatch.setattr(rewards_v7, "_get_judge", lambda: judge)
+        out = rewards_v7.v7_sparse_rank_reward(
+            prompts=["src1"] * 8,
+            completions=[f"o{i}" for i in range(8)],
+            answer=[""] * 8,
+            types=None,
+        )
+        assert len(out) == 8
+        assert len(judge.calls) == 1
+
+    def test_result_length_matches_completions(self, monkeypatch):
+        judge = V7StubJudge(reply=[0, 1, 2])
+        monkeypatch.setattr(rewards_v7, "_get_judge", lambda: judge)
+        out = rewards_v7.v7_sparse_rank_reward(
+            prompts=["s1", "s1", "s1", "s2", "s2", "s2"],
+            completions=["a", "b", "c", "d", "e", "f"],
+            answer=[""] * 6,
+            types=None,
+        )
+        assert len(out) == 6
+        assert all(isinstance(x, float) for x in out)
+
