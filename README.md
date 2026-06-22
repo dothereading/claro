@@ -25,7 +25,7 @@ langsimp/                 core package
   inference/              engine, generate, eval_harness
   prompts.py, verifier.py
 reward/                   THE reward: level_band x vocab x fidelity x format_gates
-  compose, level_band, vocab, fidelity, gates, nlp
+  compose, c1_level_band, c2_vocab, c3_fidelity, c4_gates, nlp
 scripts/                  the entrypoints needed to reproduce Claro
   train_sft.sh            SFT
   train_gspo.sh           GSPO against cefr_a2_reward

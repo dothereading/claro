@@ -27,7 +27,7 @@ from pathlib import Path
 from experiments.rewards.rewards_legacy import register_reward_function
 from reward.compose import RewardResult, default_band, default_scorer
 from reward.compose import reward as compute_reward
-from reward.fidelity import load_fidelity_config
+from reward.c3_fidelity import load_fidelity_config
 
 _log = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parents[2]

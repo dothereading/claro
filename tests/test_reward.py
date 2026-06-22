@@ -12,10 +12,10 @@ import json
 
 import pytest
 
-level_band = pytest.importorskip("reward.level_band")
-vocab = pytest.importorskip("reward.vocab")
-gates = pytest.importorskip("reward.gates")
-fidelity = pytest.importorskip("reward.fidelity")
+level_band = pytest.importorskip("reward.c1_level_band")
+vocab = pytest.importorskip("reward.c2_vocab")
+gates = pytest.importorskip("reward.c4_gates")
+fidelity = pytest.importorskip("reward.c3_fidelity")
 compose = pytest.importorskip("reward.compose")
 
 from langsimp.verifier import BaseJudge  # noqa: E402

@@ -27,7 +27,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from langsimp.verifier import LocalJudge  # noqa: E402
-from reward.fidelity import (  # noqa: E402
+from reward.c3_fidelity import (  # noqa: E402
     _PROMPT_PATH,
     FIDELITY_RESPONSE_FORMAT,
     FidelityScorer,

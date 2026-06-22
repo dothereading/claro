@@ -35,7 +35,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from reward.compose import default_band, reward  # noqa: E402
-from reward.fidelity import build_scorer, load_fidelity_config  # noqa: E402
+from reward.c3_fidelity import build_scorer, load_fidelity_config  # noqa: E402
 
 EVAL_FILES = {
     "sft": ROOT / "eval_results" / "sft_n750_1b_eval80.json",

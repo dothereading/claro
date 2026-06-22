@@ -274,3 +274,100 @@ DeepSeek's reasoning-model output takes >timeout for an 8-candidate
 ranking prompt that's ~1500 words. Haiku-4.5 returns in ~5s for
 the same prompt and trains reliably. Workhorse for training =
 Haiku; gold-standard for evaluation = DeepSeek.
+
+## Investigation 4: the cardinal reward, and what finally shipped (v10 → v11 → Claro)
+
+The shipped model is **Claro** (Gemma-3 4B, `cefr_a2_reward`). The path there
+killed the ranking reward, rebuilt it as a cardinal one, found and fixed a blind
+spot, and then discovered the real lever wasn't the reward at all.
+
+### Ranking died for two separate reasons — don't conflate them
+
+1. **Wrong target.** The v7 ranker validated beautifully offline (ρ=+0.87) and
+   trained stably, but the trained adapter *lost* 20pp A2 — it rewarded
+   "faithful + short", which together is dense B1. Internally consistent,
+   maximized correctly, just not aimed at A2.
+2. **Advantage death.** By v9 the sparse-geometric ranking form produced a
+   near-constant group mean → advantage ≈ 0 → no gradient. This is the GRPO
+   quirk that forced the move to a **cardinal** per-rollout score.
+
+### The cardinal reward: `level_band × vocab × fidelity × format_gates`
+
+Multiplicative, each component in [0, 1], so any one can veto and none can
+rescue. The design principle was to push as much as possible OFF the LLM judge
+onto **deterministic** signals (readability, sentence length, passive /
+subordination counts, a vocab list), leaving the judge to do only the one thing
+nothing else could — **decomposed** fact-by-fact fidelity (recall + unsupported
+counts, not a holistic score). Cheaper, lower-variance, and gradient-friendly.
+
+### The recurring failure was never "the judge is wrong" — the metric was blind
+
+Three times the headline looked fine while the model drifted, because the metric
+couldn't *see* the mechanism:
+- v3 **vocab** reward was anti-correlated (−0.57) with quality — it punished
+  glossing, the correct A2 behavior. Fixed with gloss-aware exemption.
+- v10 **level_band** (FRE × sentence length) sat flat at 0.48 while A2 regressed
+  72→56% — it literally can't see lexical density or syntax, so fidelity pressure
+  made the model retain source jargon for free.
+- The real B1-drift driver was **syntactic** (passives 3.7×, subordination 2× on
+  the flips) — invisible to both vocab AND readability. **v11.1** added passive +
+  subordination trapezoid factors to `level_band` (calibrated 10/90, not IQR,
+  which cratered the anchors). That gave the metric the dimension it was being
+  fooled by. Every fix = adding a measurement that sees what your eyes already do
+  — which is *why* reading raw outputs next to scores mattered: it's how the
+  blind spots were found.
+
+### Capability ceiling vs broken target (1B vs 4B)
+
+Same v11.1 reward: **1B failed** (A2 76→26%; features wouldn't move, tiered
+recall drove A1 drift) but **4B held A2 and halved hallucination**. The 1B
+catastrophe was a *capability ceiling*, not a broken reward — the same target
+worked once the model had headroom.
+
+### The real lever was the SFT start, not the reward (PLAN_4B)
+
+To make the best 4B cheaply, we treated "optimal SFT amount" as an **eval**
+problem, not a training one: faithfulness-score the *existing* `sft_n*_4b`
+ladder (no training) and point one GSPO run at the best start. This **overturned
+our own guess** (n750, which was actually the *worst* faithfulness start) in
+favor of n1500 — and faithfulness did NOT decay at high SFT-n, so the "leave
+headroom" intuition didn't apply. One 200-iter run from n1500 → Claro: A2 70% vs
+the prior model's 53%, B1 halved. Checkpoint behavior was clean: **faithfulness
+peaks early (~iter 100), difficulty-retention strengthens late (150–200).**
+
+### LLM judges over-flag; raw flag counts punish the more complete model
+
+The headline "hallucination halved" (0.37→0.23) was the *training judge's flag
+rate*, and it overstates. Disjoint judges split (gpt-4o: lower; gemini-3.5-flash:
+parity), and even `gpt-5.4-mini` under a strict prompt flagged "ramparts→walls",
+"craftsmen→people who make things", and omissions as "fabrication" — some flags
+self-exonerating in their own reason. A **strict hand-audit** (judge proposes,
+human adjudicates against the source) found **~3–4 genuine errors per 30 for both
+Claro and its SFT base — indistinguishable.** The raw 9-vs-23 gap was a
+**completeness confound**: Claro keeps more facts → more statements → more
+nitpicks. Honest verdict: **faithfulness held, not improved; the robust win is
+difficulty control.** Recall (the objective axis) held ~0.98 across all judges;
+the disagreement was only on the subjective "is this addition supported?" axis,
+where inter-judge agreement is ~50%.
+
+### Naming: it's GSPO, not GRPO
+
+We trained with `--importance-sampling-level sequence`, i.e. sequence-level
+importance ratios — that *is* GSPO. The "GRPO" label was loose umbrella naming
+carried from the code/trainer (mlx-lm-lora exposes it as `--train-mode grpo`
+with an importance-sampling flag). Token-level NaN'd; sequence-level (with the
+FP32 logits patch) is the only one that trained stably past ~15 iters.
+
+### Verification meta-themes (the transferable part)
+
+- **Decompose** an unverifiable judgment into separately-checkable sub-questions.
+- **Prefer deterministic checks**; reserve the LLM for the irreducible core.
+- **Verify the verifier**: score your known-good references through the metric
+  (the "red" step, generalized) — if gold A2 scores 0.2, the metric is broken.
+- **Goodhart**: a good optimizer exploits every gap between your proxy and your
+  intent; verifier quality bounds output quality.
+- **The metric lies; the raw output doesn't** — look at both, always.
+- **Don't grade with the grader you optimized against** (judge-swap), and
+  **measure the judge's noise** (mode-of-N).
+- The **eval harness is a separate verification problem** from the reward:
+  n=30 vs n=80 flipped a result; seeds added ±9pp.

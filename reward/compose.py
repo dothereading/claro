@@ -18,10 +18,10 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 
-from reward.fidelity import FidelityScorer, build_scorer
-from reward.gates import format_gates
-from reward.level_band import Band, level_band
-from reward.vocab import vocab_term
+from reward.c3_fidelity import FidelityScorer, build_scorer
+from reward.c4_gates import format_gates
+from reward.c1_level_band import Band, level_band
+from reward.c2_vocab import vocab_term
 
 
 @dataclass

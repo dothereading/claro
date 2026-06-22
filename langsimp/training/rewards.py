@@ -27,8 +27,8 @@ from pathlib import Path
 from langsimp.training.registry import register_reward_function
 from reward.compose import RewardResult, default_band, default_scorer
 from reward.compose import reward as compute_reward
-from reward.fidelity import load_fidelity_config
-from reward.level_band import syntactic_features
+from reward.c3_fidelity import load_fidelity_config
+from reward.c1_level_band import syntactic_features
 
 _log = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parents[2]

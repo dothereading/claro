@@ -27,7 +27,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from reward.fidelity import build_scorer  # noqa: E402
+from reward.c3_fidelity import build_scorer  # noqa: E402
 
 N_PER_MODEL = 10
 SEED = 0

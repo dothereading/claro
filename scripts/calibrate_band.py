@@ -2,7 +2,7 @@
 
 For every A2 anchor text, compute Flesch Reading Ease and mean sentence
 length (in words) using the SAME functions the reward uses at scoring time
-(reward.level_band), then record the 25th/75th percentiles of each.
+(reward.c1_level_band), then record the 25th/75th percentiles of each.
 
 Corpus is a BLEND of two A2 sources, because they disagree about A2
 readability and the model needs to satisfy both:
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from reward.level_band import (  # noqa: E402
+from reward.c1_level_band import (  # noqa: E402
     flesch_reading_ease,
     mean_sentence_length,
     syntactic_features,

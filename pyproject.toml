@@ -1,7 +1,7 @@
 [project]
-name = "language-simplification-llm"
+name = "claro"
 version = "0.1.0"
-description = "Fine-tune a small Gemma model to rewrite English at CEFR A2 level."
+description = "Claro — fine-tune a small Gemma model to rewrite English at CEFR A2 level."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
