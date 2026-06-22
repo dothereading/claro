@@ -39,4 +39,4 @@ ARGS=(grpo
     --project "${WANDB_PROJECT:-lang-simp-grpo-v10}")
 
 echo "[v10] arm=$ARM reward_fn=$REWARD_FN -> adapters/grpo_v10_$ARM, logs runs/$ARM/"
-uv run python -m langsimp.training.runner "${ARGS[@]}"
+uv run python -m claro.training.runner "${ARGS[@]}"

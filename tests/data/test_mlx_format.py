@@ -15,7 +15,7 @@ import pytest
 
 
 def _import_target():
-    import langsimp.data.mlx_format as ds
+    import claro.data.mlx_format as ds
     return ds, "new"
 
 

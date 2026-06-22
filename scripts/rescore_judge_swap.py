@@ -26,12 +26,12 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from langsimp.verifier import LocalJudge  # noqa: E402
-from reward.c3_fidelity import (  # noqa: E402
+from claro.reward.c3_fidelity import (  # noqa: E402
     _PROMPT_PATH,
     FIDELITY_RESPONSE_FORMAT,
     FidelityScorer,
 )
+from claro.verifier import LocalJudge  # noqa: E402
 
 # Disjoint-family judge for the circularity check. DeepSeek (pinned OR unpinned)
 # fails open ~80% on this structured fidelity prompt — it returns null content

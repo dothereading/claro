@@ -361,7 +361,7 @@ class RewardVerifier:
 # --- Main Execution Script ---
 
 if __name__ == "__main__":
-    SAMPLES_FILE = "samples.jsonl"
+    SAMPLES_FILE = "config/samples.jsonl"
 
     def load_samples(file_path: str):
         buckets: dict[str, list[str]] = {"A1": [], "A2": [], "B1": []}

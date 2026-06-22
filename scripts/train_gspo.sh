@@ -18,7 +18,7 @@ ARGS=(grpo
     --data "${DATA_DIR:-data/grpo}"
     --resume-adapter "${RESUME_ADAPTER:-adapters/sft/adapters.safetensors}"
     --reward-functions "cefr_a2_reward"
-    --reward-functions-file "langsimp/training/rewards.py"
+    --reward-functions-file "claro/training/rewards.py"
     --reward-weights "[1.0]"
     --iters "${ITERS:-200}"
     --batch-size "${BATCH:-1}"
@@ -33,4 +33,4 @@ ARGS=(grpo
     --project "${WANDB_PROJECT:-lang-simp-gspo}")
 
 echo "[gspo] reward=cefr_a2_reward -> ${ADAPTER_DIR:-adapters/gspo}, logs runs/gspo/"
-uv run python -m langsimp.training.runner "${ARGS[@]}"
+uv run python -m claro.training.runner "${ARGS[@]}"

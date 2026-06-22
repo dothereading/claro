@@ -36,8 +36,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from reward.compose import default_band, default_scorer  # noqa: E402
-from reward.compose import reward as compute_reward  # noqa: E402
+from claro.reward.compose import default_band, default_scorer  # noqa: E402
+from claro.reward.compose import reward as compute_reward  # noqa: E402
 
 
 @dataclass

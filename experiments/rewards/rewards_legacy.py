@@ -51,7 +51,7 @@ from pathlib import Path
 
 from wordfreq import top_n_list
 
-from langsimp.verifier import BaseJudge, split_sentences
+from claro.verifier import BaseJudge, split_sentences
 
 # Default common-word list size. Top-3000 strikes the right balance: the
 # bare top-2000 misses common A2 concrete vocabulary (e.g. "tower",
@@ -207,7 +207,7 @@ class VocabSimplicityReward(RewardComponent):
 # CEFR few-shot anchors. Loaded once at import; the file is small and
 # read-only here. Three explicit fields rather than a dict so the template
 # substitution stays readable.
-_SAMPLES_PATH = Path(__file__).resolve().parents[2] / "samples.jsonl"
+_SAMPLES_PATH = Path(__file__).resolve().parents[2] / "config" / "samples.jsonl"
 
 
 def _load_cefr_anchor(level: str) -> str:
@@ -650,7 +650,7 @@ def _get_judge():
         return _get_judge._cached
 
     backend = os.environ.get("MEANING_JUDGE_BACKEND", "").lower()
-    from langsimp.verifier import LocalJudge
+    from claro.verifier import LocalJudge
 
     if backend == "openrouter":
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -669,7 +669,7 @@ def _get_judge():
     return _get_judge._cached
 
 
-from langsimp.training.registry import register_reward_function
+from claro.training.registry import register_reward_function
 
 
 @register_reward_function()
@@ -839,7 +839,7 @@ def _variety_cli(args) -> None:
     std per group. GRPO advantage = (reward - mean) / std within a group;
     if std ≈ 0 across most groups, GRPO can't learn — this catches that
     BEFORE we burn training compute."""
-    from langsimp.inference.engine import load_model_with_adapter, make_generate_fn
+    from claro.inference.engine import load_model_with_adapter, make_generate_fn
 
     judge = None
     if args.with_judge:

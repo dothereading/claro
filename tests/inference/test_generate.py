@@ -11,7 +11,7 @@ import io
 import pytest
 
 generate = pytest.importorskip(
-    "langsimp.inference.generate", reason="generate.py not implemented yet (RED)"
+    "claro.inference.generate", reason="generate.py not implemented yet (RED)"
 )
 
 

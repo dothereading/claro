@@ -36,8 +36,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(REPO_ROOT / ".env")
 
-from langsimp.data.distill import Teacher  # noqa: E402
-from langsimp.prompts import DISTILL_SYSTEM_PROMPT  # noqa: E402
+from claro.data.distill import Teacher  # noqa: E402
+from claro.prompts import DISTILL_SYSTEM_PROMPT  # noqa: E402
 from experiments.rewards.rewards_legacy import _get_judge  # noqa: E402
 from experiments.rewards.rewards_v7 import _parse_rank_list  # noqa: E402
 
@@ -72,7 +72,7 @@ CANDIDATES:
 Respond with ONLY a JSON array of candidate IDs ordered best-first. Example for 8 candidates: [3, 0, 5, 1, 7, 2, 4, 6]"""
 
 # Round 2 prompt is the validated canonical prompt (synced with
-# langsimp/training/rewards_v7.py:_RANK_PROMPT_TEMPLATE).
+# claro/training/rewards_v7.py:_RANK_PROMPT_TEMPLATE).
 PROMPT_ROUND_2 = """You are ranking CEFR A2 simplifications of an English source paragraph.
 
 The best simplification gives an A2 learner everything the source says, in words and sentences they can read. Faithful and accessible matter equally — neither is worth sacrificing for the other.

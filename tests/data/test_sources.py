@@ -10,7 +10,7 @@ import pytest
 
 
 def _import_module():
-    import langsimp.data.sources as sources
+    import claro.data.sources as sources
     return sources
 
 

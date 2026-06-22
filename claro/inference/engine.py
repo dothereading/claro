@@ -1,5 +1,5 @@
-"""Model loading and generation primitives shared by langsimp.inference.eval_harness and
-langsimp.inference.generate. Keeps a single canonical code path for "load Gemma + LoRA,
+"""Model loading and generation primitives shared by claro.inference.eval_harness and
+claro.inference.generate. Keeps a single canonical code path for "load Gemma + LoRA,
 apply the SFT chat template, generate, and clean the output."
 """
 
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from langsimp.prompts import SFT_SYSTEM_PROMPT
+from claro.prompts import SFT_SYSTEM_PROMPT
 
 # Chat-template stop markers that mlx-lm doesn't always honor on its own.
 # Without trimming, Gemma in particular produces hundreds of trailing

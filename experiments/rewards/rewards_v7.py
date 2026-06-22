@@ -32,7 +32,7 @@ from experiments.rewards.rewards_legacy import (
     register_reward_function,
 )
 from experiments.rewards.rewards_v6 import length_factor
-from langsimp.verifier import BaseJudge
+from claro.verifier import BaseJudge
 
 _log = logging.getLogger(__name__)
 

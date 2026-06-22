@@ -9,9 +9,9 @@ We deliberately reuse `verifier.DifficultyRankingTest` as the judge so the
 eval signal is identical to the reward signal we'll use for GRPO later.
 
 Usage:
-    uv run python -m langsimp.inference.eval_harness --adapter base
-    uv run python -m langsimp.inference.eval_harness --adapter adapters/sft-a2
-    uv run python -m langsimp.inference.eval_harness --adapter adapters/dpo-a2 --output eval_results/dpo.json
+    uv run python -m claro.inference.eval_harness --adapter base
+    uv run python -m claro.inference.eval_harness --adapter adapters/sft-a2
+    uv run python -m claro.inference.eval_harness --adapter adapters/dpo-a2 --output eval_results/dpo.json
 
 Requires LM Studio running with the judge model loaded.
 """
@@ -25,13 +25,13 @@ from collections.abc import Callable
 from pathlib import Path
 from statistics import mean
 
-from langsimp.inference.engine import (
+from claro.inference.engine import (
     build_prompt,
     clean_generation,  # noqa: F401  -- re-exported for tests
     load_model_with_adapter,
     make_generate_fn,
 )
-from langsimp.verifier import DifficultyRankingTest, LocalJudge
+from claro.verifier import DifficultyRankingTest, LocalJudge
 
 # Re-export so existing imports (`from eval_harness import build_eval_prompt`,
 # tests, etc.) keep working without churn.
@@ -152,7 +152,7 @@ def _load_eval_records(path: Path) -> list[dict]:
 
 def _load_verifier_samples() -> dict[str, list[str]]:
     buckets: dict[str, list[str]] = {"A1": [], "A2": [], "B1": []}
-    with open(REPO_ROOT / "samples.jsonl") as f:
+    with open(REPO_ROOT / "config" / "samples.jsonl") as f:
         for line in f:
             line = line.strip()
             if not line:

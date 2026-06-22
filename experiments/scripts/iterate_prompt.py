@@ -21,8 +21,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from langsimp.data.distill import Teacher  # noqa: E402
-from langsimp.prompts import DISTILL_SYSTEM_PROMPT  # noqa: E402
+from claro.data.distill import Teacher  # noqa: E402
+from claro.prompts import DISTILL_SYSTEM_PROMPT  # noqa: E402
 
 
 async def main() -> None:

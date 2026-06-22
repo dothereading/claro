@@ -5,9 +5,9 @@ the OpenRouter teacher N times with `DISTILL_SYSTEM_PROMPT`, prints each
 output, and scores each one with the local CEFR verifier.
 
 Usage:
-    uv run python -m langsimp.inference.iterate --runs 4
-    uv run python -m langsimp.inference.iterate --runs 4 --seed 42
-    uv run python -m langsimp.inference.iterate --runs 4 --paragraph-file my_paragraph.txt
+    uv run python -m claro.inference.iterate --runs 4
+    uv run python -m claro.inference.iterate --runs 4 --seed 42
+    uv run python -m claro.inference.iterate --runs 4 --paragraph-file my_paragraph.txt
 """
 
 from __future__ import annotations
@@ -17,17 +17,17 @@ import asyncio
 import json
 from pathlib import Path
 
-from langsimp.data.distill import Teacher
-from langsimp.data.sources import fetch_random_paragraphs
-from langsimp.prompts import DISTILL_SYSTEM_PROMPT
-from langsimp.verifier import DifficultyRankingTest, LocalJudge, RewardVerifier
+from claro.data.distill import Teacher
+from claro.data.sources import fetch_random_paragraphs
+from claro.prompts import DISTILL_SYSTEM_PROMPT
+from claro.verifier import DifficultyRankingTest, LocalJudge, RewardVerifier
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_verifier_samples():
     buckets = {"A1": [], "A2": [], "B1": []}
-    with open(REPO_ROOT / "samples.jsonl") as f:
+    with open(REPO_ROOT / "config" / "samples.jsonl") as f:
         for line in f:
             line = line.strip()
             if not line:

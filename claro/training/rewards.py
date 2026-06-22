@@ -12,7 +12,7 @@ rate (glossed vs kept-bare source terms — the central behavioral signal),
 core-fact recall, and the level_band component std (must be > 0 now that it
 carries the active A2 defense).
 
-    --reward-functions cefr_a2_reward --reward-functions-file langsimp/training/rewards.py
+    --reward-functions cefr_a2_reward --reward-functions-file claro/training/rewards.py
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from langsimp.training.registry import register_reward_function
-from reward.compose import RewardResult, default_band, default_scorer
-from reward.compose import reward as compute_reward
-from reward.c3_fidelity import load_fidelity_config
-from reward.c1_level_band import syntactic_features
+from claro.reward.c1_level_band import syntactic_features
+from claro.reward.c3_fidelity import load_fidelity_config
+from claro.reward.compose import RewardResult, default_band, default_scorer
+from claro.reward.compose import reward as compute_reward
+from claro.training.registry import register_reward_function
 
 _log = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parents[2]

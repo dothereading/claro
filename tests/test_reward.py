@@ -12,13 +12,13 @@ import json
 
 import pytest
 
-level_band = pytest.importorskip("reward.c1_level_band")
-vocab = pytest.importorskip("reward.c2_vocab")
-gates = pytest.importorskip("reward.c4_gates")
-fidelity = pytest.importorskip("reward.c3_fidelity")
-compose = pytest.importorskip("reward.compose")
+level_band = pytest.importorskip("claro.reward.c1_level_band")
+vocab = pytest.importorskip("claro.reward.c2_vocab")
+gates = pytest.importorskip("claro.reward.c4_gates")
+fidelity = pytest.importorskip("claro.reward.c3_fidelity")
+compose = pytest.importorskip("claro.reward.compose")
 
-from langsimp.verifier import BaseJudge  # noqa: E402
+from claro.verifier import BaseJudge  # noqa: E402
 
 
 class StubJudge(BaseJudge):
@@ -473,7 +473,7 @@ class TestTrainerAdapter:
     ]
 
     def test_shipped_reward_runs_offline(self, tmp_path, monkeypatch):
-        rewards = pytest.importorskip("langsimp.training.rewards")
+        rewards = pytest.importorskip("claro.training.rewards")
         stub = _StubScorer({"source_facts": [{"fact": "a", "status": "present"}],
                             "unsupported_claims": []})
         monkeypatch.setattr(rewards, "_run_dir", lambda: tmp_path)
@@ -488,7 +488,7 @@ class TestTrainerAdapter:
         assert "fidelity_mean" in summary
 
     def test_shipped_reward_calls_scorer_per_rollout(self, tmp_path, monkeypatch):
-        rewards = pytest.importorskip("langsimp.training.rewards")
+        rewards = pytest.importorskip("claro.training.rewards")
         stub = _StubScorer({"source_facts": [{"fact": "a", "status": "present"}],
                             "unsupported_claims": []})
         monkeypatch.setattr(rewards, "_run_dir", lambda: tmp_path)

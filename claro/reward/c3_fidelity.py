@@ -35,11 +35,11 @@ from pathlib import Path
 
 import yaml
 
-from langsimp.verifier import BaseJudge, LocalJudge
+from claro.verifier import BaseJudge, LocalJudge
 
 _log = logging.getLogger(__name__)
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _ROOT / "config" / "reward.yaml"
 _PROMPT_PATH = _ROOT / "prompts" / "fidelity_judge.txt"
 

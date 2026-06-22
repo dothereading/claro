@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from langsimp.verifier import BaseJudge
+from claro.verifier import BaseJudge
 
 rewards = pytest.importorskip(
     "experiments.rewards.rewards_legacy", reason="rewards.py not implemented yet (RED)"

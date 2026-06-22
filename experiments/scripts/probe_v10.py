@@ -28,7 +28,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from reward.compose import default_band, default_scorer, reward  # noqa: E402
+from claro.reward.compose import default_band, default_scorer, reward  # noqa: E402
 
 # 3 regression cases + 2 fixed others from the eval set.
 PROBE_TITLES = ["Tomorrow Never Dies", "Melicope", "Ali Darassa", "Posad", "Margot Sponer"]
@@ -83,7 +83,7 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=512)
     args = ap.parse_args()
 
-    from langsimp.inference.engine import load_model_with_adapter, make_generate_fn
+    from claro.inference.engine import load_model_with_adapter, make_generate_fn
 
     use_judge = args.arm == "full" and bool(os.environ.get("OPENROUTER_API_KEY"))
     band = default_band()

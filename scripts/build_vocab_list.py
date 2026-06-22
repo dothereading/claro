@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 
 from wordfreq import top_n_list  # noqa: E402
 
-from reward.nlp import nlp, word_lemmas  # noqa: E402
+from claro.reward.nlp import nlp, word_lemmas  # noqa: E402
 
 # Frequency backstop: lemmatized top-N English words unioned onto the Oxford
 # core. 5000 zeros out false-positives on the real (with-source) task while

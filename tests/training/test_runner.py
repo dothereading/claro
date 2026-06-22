@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-train = pytest.importorskip("langsimp.training.runner", reason="train.py not implemented yet")
+train = pytest.importorskip("claro.training.runner", reason="train.py not implemented yet")
 
 
 class TestParseSftLine:
@@ -269,7 +269,7 @@ class TestGrpoCommand:
             data=str(tmp_path / "grpo"),
             batch_size=1, lora_layers=16, iters=200, lr=1e-6,
             reward_functions="cefr_a2_reward",
-            reward_functions_file="langsimp/training/rewards.py",
+            reward_functions_file="claro/training/rewards.py",
             reward_weights="[1.0]", group_size=8, temperature=1.0,
             max_completion_length=384, importance_sampling_level="sequence",
             val_batches=5, steps_per_eval=50, steps_per_report=10,

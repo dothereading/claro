@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from langsimp.verifier import (
+from claro.verifier import (
     BaseJudge,
     DifficultyRankingTest,
     LocalJudge,
@@ -95,7 +95,7 @@ class TestLocalJudgeAuth:
             resp.raise_for_status.return_value = None
             return resp
 
-        monkeypatch.setattr("langsimp.verifier.requests.post", fake_post)
+        monkeypatch.setattr("claro.verifier.requests.post", fake_post)
         return captured
 
     def test_no_auth_header_when_no_api_key(self, monkeypatch):

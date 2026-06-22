@@ -20,7 +20,7 @@ def __getattr__(name: str):
     # Lazy so that importing a single component (e.g. reward.nlp from the
     # offline vocab builder) doesn't pull in the judge / compose stack.
     if name in __all__:
-        from reward import compose
+        from claro.reward import compose
 
         return getattr(compose, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

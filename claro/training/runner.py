@@ -6,8 +6,8 @@ metrics to Weights & Biases in real time.
 
 Two subcommands mirroring the previous shell scripts:
 
-    uv run python -m langsimp.training.runner sft  --model ... --data data/mlx     --iters 300 ...
-    uv run python -m langsimp.training.runner dpo  --model ... --data data/dpo_mlx --iters 300 --beta 0.1 ...
+    uv run python -m claro.training.runner sft  --model ... --data data/mlx     --iters 300 ...
+    uv run python -m claro.training.runner dpo  --model ... --data data/dpo_mlx --iters 300 --beta 0.1 ...
 
 Offline-safe: if WANDB_API_KEY is missing or WANDB_MODE=disabled, training
 runs without W&B and prints a one-line note. Training never breaks because
@@ -689,7 +689,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="cefr_a2_reward",
     )
     grpo.add_argument(
-        "--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py")
+        "--reward-functions-file", default=str(REPO_ROOT / "claro" / "training" / "rewards.py")
     )
     grpo.add_argument(
         "--reward-weights",

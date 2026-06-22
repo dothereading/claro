@@ -11,7 +11,7 @@ import json
 import pytest
 
 eval_mod = pytest.importorskip(
-    "langsimp.inference.eval_harness", reason="eval_harness.py not implemented yet (RED)"
+    "claro.inference.eval_harness", reason="eval_harness.py not implemented yet (RED)"
 )
 
 

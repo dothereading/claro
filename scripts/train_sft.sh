@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fine-tune the SFT LoRA via mlx-lm, with W&B logging and metric forwarding.
-# Routes through the runner (langsimp.training.runner) so we get a parsed loss curve in
+# Routes through the runner (claro.training.runner) so we get a parsed loss curve in
 # Weights & Biases as well as the raw stdout in the terminal.
 #
 # Run from the repo root:
@@ -28,4 +28,4 @@ if [[ -n "${ADAPTER_DIR:-}" ]]; then
     ARGS+=(--adapter-path "$ADAPTER_DIR")
 fi
 
-uv run python -m langsimp.training.runner "${ARGS[@]}"
+uv run python -m claro.training.runner "${ARGS[@]}"

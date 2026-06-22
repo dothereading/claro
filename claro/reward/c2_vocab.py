@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 from math import prod
 from pathlib import Path
 
-from reward.nlp import doc, find_glossed_lemmas, is_exempt_token
+from claro.reward.nlp import doc, find_glossed_lemmas, is_exempt_token
 
-_VOCAB_PATH = Path(__file__).resolve().parents[1] / "data" / "vocab_1500.txt"
+_VOCAB_PATH = Path(__file__).resolve().parents[2] / "data" / "vocab_1500.txt"
 
 _FLOOR = 0.2
 

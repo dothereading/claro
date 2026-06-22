@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-import langsimp.prompts as prompts
+import claro.prompts as prompts
 
 EXPECTED_CONSTANTS = (
     "DISTILL_SYSTEM_PROMPT",
@@ -53,7 +53,7 @@ class TestPromptLoader:
 
     def test_yaml_file_parses_independently(self):
         # Catches the case where prompts.yaml is malformed but somehow
-        # importing langsimp.prompts didn't raise (e.g. cached import).
+        # importing claro.prompts didn't raise (e.g. cached import).
         path = Path(prompts.__file__).parent / "prompts.yaml"
         data = yaml.safe_load(path.read_text())
         assert isinstance(data, dict)

@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 
-from langsimp.verifier import (
+from claro.verifier import (
     BaseJudge,
     LocalJudge,
     PacingVarietyTest,

@@ -19,9 +19,9 @@ from pathlib import Path
 
 import textstat
 
-from reward.nlp import doc
+from claro.reward.nlp import doc
 
-_BAND_PATH = Path(__file__).resolve().parents[1] / "config" / "band.json"
+_BAND_PATH = Path(__file__).resolve().parents[2] / "config" / "band.json"
 
 _FLOOR = 0.2
 

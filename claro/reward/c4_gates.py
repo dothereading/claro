@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from langsimp.verifier import split_sentences
+from claro.verifier import split_sentences
 
 _MARKDOWN_PATTERNS = [
     re.compile(r"\*\*[^*\n]+\*\*"),  # **bold**

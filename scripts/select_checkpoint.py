@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from langsimp.inference.engine import load_model_with_adapter, make_generate_fn  # noqa: E402
+from claro.inference.engine import load_model_with_adapter, make_generate_fn  # noqa: E402
 
 
 def _checkpoints(run_dir: Path, iters: list[int] | None) -> list[tuple[int, Path]]:

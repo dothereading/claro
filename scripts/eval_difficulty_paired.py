@@ -31,15 +31,15 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from langsimp.inference.engine import load_model_with_adapter, make_generate_fn  # noqa: E402
-from langsimp.verifier import DifficultyRankingTest, LocalJudge  # noqa: E402
+from claro.inference.engine import load_model_with_adapter, make_generate_fn  # noqa: E402
+from claro.verifier import DifficultyRankingTest, LocalJudge  # noqa: E402
 
 JUDGE_MODEL = "deepseek/deepseek-v4-pro:gmicloud/fp8"
 
 
 def _load_anchors() -> dict[str, list[str]]:
     buckets: dict[str, list[str]] = {"A1": [], "A2": [], "B1": []}
-    for line in (ROOT / "samples.jsonl").read_text().splitlines():
+    for line in (ROOT / "config" / "samples.jsonl").read_text().splitlines():
         if not line.strip():
             continue
         r = json.loads(line)

@@ -26,13 +26,13 @@ from typing import Optional
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from langsimp.prompts import (
+from claro.prompts import (
     DISTILL_SYSTEM_PROMPT,
     REJECTED_CLARIFY_PROMPT,
     REJECTED_ELI5_PROMPT,
     REJECTED_SUMMARIZE_PROMPT,
 )
-from langsimp.data.sources import WikiParagraph, fetch_random_paragraphs
+from claro.data.sources import WikiParagraph, fetch_random_paragraphs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

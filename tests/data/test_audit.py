@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import langsimp.data.audit as da
-from langsimp.verifier import BaseJudge
+import claro.data.audit as da
+from claro.verifier import BaseJudge
 
 
 class StubJudge(BaseJudge):

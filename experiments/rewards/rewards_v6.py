@@ -35,7 +35,7 @@ from experiments.rewards.rewards_legacy import (
     _v5_has_markdown,
     register_reward_function,
 )
-from langsimp.verifier import BaseJudge
+from claro.verifier import BaseJudge
 
 _log = logging.getLogger(__name__)
 
