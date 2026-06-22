@@ -259,6 +259,7 @@ def main() -> int:
     samples = _load_verifier_samples()
     if args.judge_backend == "openrouter":
         import os
+
         from dotenv import load_dotenv
         load_dotenv()
         api_key = os.environ.get("OPENROUTER_API_KEY")

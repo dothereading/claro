@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
@@ -31,8 +31,8 @@ load_dotenv(REPO_ROOT / ".env")
 
 from scipy.stats import spearmanr  # noqa: E402
 
-from langsimp.training.rewards import RewardContext, _get_judge  # noqa: E402
-from langsimp.training.rewards_v6 import FidelityReward, GroupRankReward  # noqa: E402
+from experiments.rewards.rewards_legacy import RewardContext, _get_judge  # noqa: E402
+from experiments.rewards.rewards_v6 import FidelityReward, GroupRankReward  # noqa: E402
 
 # Subjective ranks (1=best, 5=worst). Lifted verbatim from /tmp/v5_test.py
 # so this script doesn't depend on a tmp file we don't own.

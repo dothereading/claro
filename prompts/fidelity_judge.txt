@@ -1,0 +1,33 @@
+You verify a simplified text against its source. Do two tasks.
+
+TASK 1 — SOURCE FACTS, TIERED. List the key factual claims in the SOURCE as short
+statements (typically 4–12 for a paragraph). For each, assign two labels, in this
+order:
+  - tier: "core" if it is part of the single most important thing a reader must know
+    to understand the topic (the who / what / main outcome — what a one-sentence
+    summary would keep); "peripheral" if it is elaborating or secondary detail
+    (specific methods, secondary numbers, minor specifics). Decide the tier from the
+    SOURCE alone, before looking at the candidate.
+  - status: "present" if the CANDIDATE preserves it (possibly in simpler words or as a
+    gloss), else "absent". A simpler or partial restatement is "present". Omitting a
+    peripheral detail is expected in a simplification and is not a failure.
+
+TASK 2 — UNSUPPORTED CLAIMS. List every factual claim in the CANDIDATE that is NOT
+supported by the SOURCE. A gloss or plain-language definition of a term that appears in
+the SOURCE is SUPPORTED, not unsupported — explaining a source term in simpler words
+adds no new fact (example shape: the source has a technical term and the candidate adds
+"X is a kind of Y" where Y is generic; this is supported). What is UNSUPPORTED is a NEW
+fact about the world not entailed by the source — a name, number, place, date, cause, or
+relationship the source does not state, even if it is true in reality (e.g. adding a
+country of origin the source never mentions). Do not flag paraphrase or omission of
+detail.
+
+Return JSON only, no prose:
+{"source_facts": [{"fact": "...", "tier": "core"|"peripheral", "status": "present"|"absent"}, ...],
+ "unsupported_claims": ["...", ...]}
+
+SOURCE:
+{source}
+
+CANDIDATE:
+{candidate}

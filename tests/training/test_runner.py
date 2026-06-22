@@ -256,3 +256,41 @@ class TestBuildRunName:
         )
         assert "iters500" in name
         assert "lr5e-06" in name or "lr5.0e-06" in name or "5e-06" in name
+
+
+class TestGrpoCommand:
+    """The GRPO branch must forward --save-every so we get intermediate
+    checkpoints (e.g. every 50 iters) for checkpoint selection / early-stop."""
+
+    def _args(self, tmp_path, **overrides):
+        import argparse
+        base = dict(
+            model="mlx-community/gemma-3-4b-it-bf16",
+            data=str(tmp_path / "grpo"),
+            batch_size=1, lora_layers=16, iters=200, lr=1e-6,
+            reward_functions="cefr_a2_reward",
+            reward_functions_file="langsimp/training/rewards.py",
+            reward_weights="[1.0]", group_size=8, temperature=1.0,
+            max_completion_length=384, importance_sampling_level="sequence",
+            val_batches=5, steps_per_eval=50, steps_per_report=10,
+            save_every=50, resume_adapter="", adapter_path=str(tmp_path / "out"),
+            project="lang-simp-grpo-v11",
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_forwards_save_every(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, parser, **kw):
+            captured["cmd"] = cmd
+            return {"exit_code": 0}
+
+        monkeypatch.setattr(train, "run_with_logging", fake_run)
+        monkeypatch.setattr(train, "_finalize", lambda *a, **k: None)
+
+        rc = train._grpo(self._args(tmp_path, save_every=50))
+        assert rc == 0
+        cmd = captured["cmd"]
+        assert "--save-every" in cmd
+        assert cmd[cmd.index("--save-every") + 1] == "50"

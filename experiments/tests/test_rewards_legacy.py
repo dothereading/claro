@@ -13,7 +13,7 @@ import pytest
 from langsimp.verifier import BaseJudge
 
 rewards = pytest.importorskip(
-    "langsimp.training.rewards", reason="rewards.py not implemented yet (RED)"
+    "experiments.rewards.rewards_legacy", reason="rewards.py not implemented yet (RED)"
 )
 
 
@@ -789,7 +789,7 @@ class TestCombinedRewardV5:
 
 
 rewards_v6 = pytest.importorskip(
-    "langsimp.training.rewards_v6", reason="rewards_v6.py not implemented yet (RED)"
+    "experiments.rewards.rewards_v6", reason="rewards_v6.py not implemented yet (RED)"
 )
 
 
@@ -1176,7 +1176,7 @@ class TestV6RegisteredFunction:
 
 
 rewards_v7 = pytest.importorskip(
-    "langsimp.training.rewards_v7", reason="rewards_v7.py not implemented yet (RED)"
+    "experiments.rewards.rewards_v7", reason="rewards_v7.py not implemented yet (RED)"
 )
 
 

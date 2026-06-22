@@ -15,6 +15,8 @@ dependencies = [
     "wandb>=0.18",
     "wordfreq>=3.1",
     "pyyaml>=6.0",
+    "spacy>=3.8.14",
+    "textstat>=0.7.13",
 ]
 
 [dependency-groups]
@@ -25,7 +27,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "experiments/tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Fine-tune the SFT LoRA via mlx-lm, with W&B logging and metric forwarding.
-# Routes through train.py (Python wrapper) so we get a parsed loss curve in
+# Routes through the runner (langsimp.training.runner) so we get a parsed loss curve in
 # Weights & Biases as well as the raw stdout in the terminal.
 #
 # Run from the repo root:
-#   bash scripts/train_mlx.sh
+#   bash scripts/train_sft.sh
 #
 # Env-var overrides (any subset):
 #   MODEL DATA_DIR ADAPTER_DIR ITERS BATCH LR LORA_LAYERS WANDB_PROJECT
 #
-# To run without W&B: WANDB_MODE=disabled bash scripts/train_mlx.sh
+# To run without W&B: WANDB_MODE=disabled bash scripts/train_sft.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

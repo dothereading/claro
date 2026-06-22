@@ -1,0 +1,28 @@
+# v10 cardinal reward configuration.
+#
+# Only the fidelity component (Component 3) reads this file; the band and
+# vocab components are calibrated offline into config/band.json and
+# data/vocab_1500.txt respectively.
+
+fidelity:
+  # OpenRouter model id for the per-rollout fidelity judge. The repo already
+  # wires anthropic/claude-haiku-4-5 as the default OpenRouter judge; the
+  # eval generations were scored with deepseek. Either is fine — keep it
+  # cheap, it is one call per rollout (8 per group).
+  model: anthropic/claude-haiku-4-5
+  base_url: https://openrouter.ai/api/v1
+  temperature: 0.0
+  max_tokens: 1500
+
+  # Bump this when prompts/fidelity_judge.txt or the judge request shape
+  # changes — it is part of the cache key, so old verdicts are not reused.
+  # v10.2: switched to OpenRouter structured outputs (json_schema, strict).
+  # v11: tiered core/peripheral source facts + gloss-is-supported rule.
+  prompt_version: v11
+
+  # Parallel judge calls within a group of 8 rollouts.
+  concurrency: 4
+
+  # sqlite cache of judge verdicts, keyed on
+  # sha256(model + prompt_version + source + candidate).
+  cache_path: runs/fidelity_cache.sqlite

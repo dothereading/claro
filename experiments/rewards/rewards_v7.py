@@ -25,13 +25,13 @@ import re
 import warnings
 from typing import Any
 
-from langsimp.training.rewards import (
+from experiments.rewards.rewards_legacy import (
     _get_judge,
     _v5_has_loop,
     _v5_has_markdown,
     register_reward_function,
 )
-from langsimp.training.rewards_v6 import length_factor
+from experiments.rewards.rewards_v6 import length_factor
 from langsimp.verifier import BaseJudge
 
 _log = logging.getLogger(__name__)

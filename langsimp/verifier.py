@@ -74,11 +74,19 @@ class LocalJudge(BaseJudge):
         model_name: str,
         temperature: float = 0.2,
         api_key: str | None = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
     ):
         self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self.model = model_name
         self.temperature = temperature
         self.api_key = api_key
+        self.max_tokens = max_tokens
+        # OpenAI/OpenRouter structured-output spec, e.g.
+        # {"type": "json_schema", "json_schema": {...}}. When set, the
+        # provider constrains the reply to valid JSON matching the schema,
+        # which removes the parse-failure tail on long judge replies.
+        self.response_format = response_format
 
     def evaluate(self, prompt: str) -> dict[str, Any]:
         payload = {
@@ -86,6 +94,10 @@ class LocalJudge(BaseJudge):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+        if self.response_format is not None:
+            payload["response_format"] = self.response_format
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
 
         # Transient errors (read timeouts, 5xx, connection resets) shouldn't zero

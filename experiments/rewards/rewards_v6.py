@@ -24,7 +24,7 @@ import math
 import warnings
 from typing import Any
 
-from langsimp.training.rewards import (
+from experiments.rewards.rewards_legacy import (
     _A1_ANCHOR,
     _A2_ANCHOR,
     _B1_ANCHOR,

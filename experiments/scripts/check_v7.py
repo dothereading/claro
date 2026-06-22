@@ -23,18 +23,18 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(REPO_ROOT / ".env")
 
-from langsimp.training.rewards import _get_judge  # noqa: E402
-from langsimp.training.rewards_v7 import (  # noqa: E402
+from experiments.rewards.rewards_legacy import _get_judge  # noqa: E402
+from experiments.rewards.rewards_v7 import (  # noqa: E402
+    _RANK_PROMPT_TEMPLATE,
     SparseRankReward,
     _parse_rank_list,
-    _RANK_PROMPT_TEMPLATE,
     _score_ranks_sparse,
 )
 

@@ -29,7 +29,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
@@ -38,8 +38,8 @@ load_dotenv(REPO_ROOT / ".env")
 
 from langsimp.data.distill import Teacher  # noqa: E402
 from langsimp.prompts import DISTILL_SYSTEM_PROMPT  # noqa: E402
-from langsimp.training.rewards import _get_judge  # noqa: E402
-from langsimp.training.rewards_v7 import _parse_rank_list, _score_ranks_sparse  # noqa: E402
+from experiments.rewards.rewards_legacy import _get_judge  # noqa: E402
+from experiments.rewards.rewards_v7 import _parse_rank_list  # noqa: E402
 
 # ---------- Three source paragraphs ----------
 

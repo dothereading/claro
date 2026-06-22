@@ -584,6 +584,8 @@ def _grpo(args: argparse.Namespace) -> int:
         str(args.steps_per_eval),
         "--steps-per-report",
         str(args.steps_per_report),
+        "--save-every",
+        str(args.save_every),
         "--grad-checkpoint",
     ]
     if args.resume_adapter and Path(args.resume_adapter).exists():
@@ -679,24 +681,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default="adapters/dpo/latest/adapters.safetensors",
         help="resume from this adapter file (silently ignored if missing)",
     )
-    # Reward functions are called by mlx-lm-lora in the order listed below.
-    # meaning_reward MUST come before difficulty_reward — both pull from a
-    # shared judge bundle keyed on (source, output); meaning warms the
-    # cache so difficulty is free. Weights match the order, sum to 1.0,
-    # mirror langsimp.training.rewards._default_combined().
+    # Default to the shipped single cardinal reward
+    # (level_band x vocab x fidelity x format_gates). train_gspo.sh passes
+    # these explicitly too; the older multi-component arms live in experiments/.
     grpo.add_argument(
         "--reward-functions",
-        default=(
-            "meaning_reward,difficulty_reward,repetition_reward,"
-            "vocab_reward,length_reward,markdown_reward"
-        ),
+        default="cefr_a2_reward",
     )
     grpo.add_argument(
         "--reward-functions-file", default=str(REPO_ROOT / "langsimp" / "training" / "rewards.py")
     )
     grpo.add_argument(
         "--reward-weights",
-        default="[0.40,0.25,0.15,0.10,0.05,0.05]",
+        default="[1.0]",
         help="JSON list, must match the order/length of --reward-functions",
     )
     grpo.add_argument(
@@ -730,6 +727,9 @@ def _build_parser() -> argparse.ArgumentParser:
     grpo.add_argument("--val-batches", type=int, default=5)
     grpo.add_argument("--steps-per-eval", type=int, default=50)
     grpo.add_argument("--steps-per-report", type=int, default=10)
+    grpo.add_argument("--save-every", type=int, default=100,
+                      help="checkpoint cadence (NNNNNNN_adapters.safetensors); "
+                           "set to 50 for finer checkpoint selection / early-stop")
     grpo.add_argument("--project", default="lang-simp-grpo")
     return p
 

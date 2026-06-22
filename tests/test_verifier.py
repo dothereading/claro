@@ -127,6 +127,20 @@ class TestLocalJudgeAuth:
         j.evaluate("hello")
         assert captured["json"]["model"] == "anthropic/claude-haiku-4-5"
 
+    def test_response_format_and_max_tokens_in_payload(self, monkeypatch):
+        captured = self._mock_post(monkeypatch)
+        rf = {"type": "json_schema", "json_schema": {"name": "v", "strict": True}}
+        j = LocalJudge(base_url="http://x", model_name="m", max_tokens=1500, response_format=rf)
+        j.evaluate("hello")
+        assert captured["json"]["max_tokens"] == 1500
+        assert captured["json"]["response_format"] == rf
+
+    def test_no_response_format_by_default(self, monkeypatch):
+        captured = self._mock_post(monkeypatch)
+        LocalJudge(base_url="http://x", model_name="m").evaluate("hello")
+        assert "response_format" not in captured["json"]
+        assert "max_tokens" not in captured["json"]
+
 
 class TestLocalJudgeJsonParse:
     def setup_method(self):

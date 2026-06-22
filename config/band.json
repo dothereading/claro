@@ -1,0 +1,15 @@
+{
+  "n_anchors": 602,
+  "fre_q1": 64.55,
+  "fre_q3": 92.9,
+  "msl_q1": 6.77,
+  "msl_q3": 13.23,
+  "pass_q1": 0.0,
+  "pass_q3": 0.154,
+  "sub_q1": 0.0,
+  "sub_q3": 1.143,
+  "fre_median": 79.76,
+  "msl_median": 10.43,
+  "pass_median": 0.0,
+  "sub_median": 0.333
+}

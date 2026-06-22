@@ -12,3 +12,7 @@ adapters/
 .claude/scheduled_tasks.lock
 wandb/
 eval_results/
+runs/
+.DS_Store
+.opus_cache.json
+scripts/.opus_cache.json
