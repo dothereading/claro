@@ -10,21 +10,21 @@ Two prompts do most of the work:
   and DPO. The model learns the rules from gradient updates, so the inference-
   time prompt only needs to carry intent.
 
-Plus three `REJECTED_*` prompts used to diversify the DPO rejected pool.
+Plus three `REJECTED_*` prompts used to diversify the DPO rejected pool, and
+`FIDELITY_JUDGE_PROMPT`, the extraction-style prompt for the reward / eval
+fidelity judge (rendered with `{source}` / `{candidate}`).
 
 The prompts themselves live in `prompts.yaml` (easier to edit, no Python
 escaping). This module is just the loader.
 """
 
-from pathlib import Path
+from claro.resources import load_yaml
 
-import yaml
-
-_PROMPTS_PATH = Path(__file__).resolve().parent / "prompts.yaml"
-_data: dict[str, str] = yaml.safe_load(_PROMPTS_PATH.read_text())
+_data: dict[str, str] = load_yaml("claro/prompts.yaml")
 
 DISTILL_SYSTEM_PROMPT: str = _data["distill_system"]
 SFT_SYSTEM_PROMPT: str = _data["sft_system"]
 REJECTED_SUMMARIZE_PROMPT: str = _data["rejected_summarize"]
 REJECTED_ELI5_PROMPT: str = _data["rejected_eli5"]
 REJECTED_CLARIFY_PROMPT: str = _data["rejected_clarify"]
+FIDELITY_JUDGE_PROMPT: str = _data["fidelity_judge"]

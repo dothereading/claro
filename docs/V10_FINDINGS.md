@@ -218,7 +218,7 @@ branch. The faithfulness win is real but it came at the cost of the primary obje
 - Reward: `reward/{compose,level_band,vocab,fidelity,gates,nlp}.py`; trainer adapters
   `langsimp/training/rewards_v10.py` (`v10_full_reward` / `v10_nojudge_reward`).
 - Config/data: `config/{band.json,reward.yaml}`, `data/vocab_1500.txt`, `data/anchors/`,
-  `prompts/fidelity_judge.txt`.
+  `claro/prompts.yaml` (`fidelity_judge`).
 - Scripts: `build_vocab_list.py`, `calibrate_band.py`, `validate_reward.py`, `probe_v10.py`,
   `train_grpo_v10.sh`.
 - Logs: `runs/<arm>/{metrics,rollouts}.jsonl`. Adapter: `adapters/grpo_v10_full`.

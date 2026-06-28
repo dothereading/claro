@@ -190,7 +190,7 @@ unpinned deepseek or a GPT/Gemini-class judge (which support structured outputs)
   `langsimp/training/rewards_v11.py` (`v11_reward` adapter, §5 readouts);
   `scripts/train_grpo_v11.sh`. Tests in `tests/test_reward.py` (green).
 - **Config/data**: `config/band.json` (10/90, PASS+SUB), `config/reward.yaml`
-  (`prompt_version: v11`), `prompts/fidelity_judge.txt` (tiered + gloss),
+  (`prompt_version: v11`), `claro/prompts.yaml` `fidelity_judge` (tiered + gloss),
   `data/vocab_1500.txt`, `data/flips/a2_to_b1.jsonl`.
 - **Adapters**: `adapters/grpo_v11` (1B), `adapters/grpo_v11_4b` (4B).
 - **Evals**: `eval_results/grpo_v11_eval50.json` (1B), `eval_results/grpo_v11_4b_eval.json`

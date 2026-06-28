@@ -33,15 +33,13 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
+from claro.prompts import FIDELITY_JUDGE_PROMPT
+from claro.resources import load_yaml, resolve
 from claro.verifier import BaseJudge, LocalJudge
 
 _log = logging.getLogger(__name__)
 
-_ROOT = Path(__file__).resolve().parents[2]
-_CONFIG_PATH = _ROOT / "config" / "reward.yaml"
-_PROMPT_PATH = _ROOT / "prompts" / "fidelity_judge.txt"
+_CONFIG_PATH = "config/reward.yaml"
 
 _FLOOR = 0.2
 
@@ -55,7 +53,7 @@ _HALLUC_ALPHA = 1.2
 # OpenRouter / OpenAI structured-output schema for the verdict. `strict: true`
 # forces the provider to emit JSON matching this exactly, eliminating the
 # parse-failure tail seen on long free-form replies. Mirror this shape in
-# prompts/fidelity_judge.txt and is_valid_verdict().
+# the `fidelity_judge` prompt (claro/prompts.yaml) and is_valid_verdict().
 FIDELITY_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -267,7 +265,7 @@ class FidelityScorer:
 
 
 def load_fidelity_config(path: str | Path = _CONFIG_PATH) -> dict:
-    return yaml.safe_load(Path(path).read_text())["fidelity"]
+    return load_yaml(path)["fidelity"]
 
 
 def build_scorer(
@@ -291,11 +289,11 @@ def build_scorer(
             max_tokens=cfg.get("max_tokens", 1500),
             response_format=FIDELITY_RESPONSE_FORMAT,
         )
-    cache = JudgeCache(_ROOT / cfg["cache_path"]) if use_cache else None
+    cache = JudgeCache(resolve(cfg["cache_path"])) if use_cache else None
     return FidelityScorer(
         judge=judge,
         model_id=cfg["model"],
-        prompt_template=_PROMPT_PATH.read_text(),
+        prompt_template=FIDELITY_JUDGE_PROMPT,
         prompt_version=cfg["prompt_version"],
         cache=cache,
     )

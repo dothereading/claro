@@ -20,6 +20,7 @@ EXPECTED_CONSTANTS = (
     "REJECTED_SUMMARIZE_PROMPT",
     "REJECTED_ELI5_PROMPT",
     "REJECTED_CLARIFY_PROMPT",
+    "FIDELITY_JUDGE_PROMPT",
 )
 
 
@@ -63,7 +64,15 @@ class TestPromptLoader:
             "rejected_summarize",
             "rejected_eli5",
             "rejected_clarify",
+            "fidelity_judge",
         }
+
+    def test_fidelity_prompt_keeps_placeholders(self):
+        # The fidelity judge prompt is rendered by substituting {source} and
+        # {candidate}; both must survive the YAML literal-block round-trip.
+        text = prompts.FIDELITY_JUDGE_PROMPT
+        assert "{source}" in text
+        assert "{candidate}" in text
 
     def test_missing_key_in_yaml_raises_keyerror(self, tmp_path):
         # If someone deletes a key from prompts.yaml, lookup on the parsed

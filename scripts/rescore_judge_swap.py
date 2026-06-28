@@ -26,8 +26,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
+from claro.prompts import FIDELITY_JUDGE_PROMPT  # noqa: E402
 from claro.reward.c3_fidelity import (  # noqa: E402
-    _PROMPT_PATH,
     FIDELITY_RESPONSE_FORMAT,
     FidelityScorer,
 )
@@ -55,7 +55,7 @@ def build_swap_scorer() -> FidelityScorer:
         response_format=FIDELITY_RESPONSE_FORMAT,
     )
     # Fresh cache namespace (different judge) via model_id in the key.
-    return FidelityScorer(judge, SWAP_JUDGE, _PROMPT_PATH.read_text(), "v11-swap", cache=None)
+    return FidelityScorer(judge, SWAP_JUDGE, FIDELITY_JUDGE_PROMPT, "v11-swap", cache=None)
 
 
 def score_set(scorer, items):

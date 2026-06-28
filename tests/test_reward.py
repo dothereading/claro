@@ -410,6 +410,16 @@ class TestFidelityScorer:
         assert s.judge.calls == 1
         assert s.cache_hits == 1
 
+    def test_build_scorer_wires_yaml_prompt(self):
+        # build_scorer sources its template from the `fidelity_judge` prompt in
+        # prompts.yaml (no more standalone .txt), and its config from reward.yaml.
+        from claro.prompts import FIDELITY_JUDGE_PROMPT
+
+        s = fidelity.build_scorer(judge=StubJudge([]), use_cache=False)
+        assert s.prompt_template == FIDELITY_JUDGE_PROMPT
+        assert "{source}" in s.prompt_template and "{candidate}" in s.prompt_template
+        assert s.prompt_version == fidelity.load_fidelity_config()["prompt_version"]
+
 
 # ---------- Composition: gated rollout short-circuits the judge ----------
 
